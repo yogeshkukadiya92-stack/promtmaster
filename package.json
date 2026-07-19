@@ -10,7 +10,7 @@
     "worker": "node server/agent-worker.mjs",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "npm run build && node --check server/index.mjs && node --check server/mongo-repository.mjs && node --check server/session-token.mjs && node --check server/supabase-repository.mjs && node --check server/agent-worker.mjs && node --check server/email-provider.mjs",
+    "check": "npm run build && node --check server/index.mjs && node --check server/mongo-repository.mjs && node --check server/session-token.mjs && node --check server/supabase-repository.mjs && node --check server/agent-worker.mjs && node --check server/railway-entrypoint.mjs && node --check server/email-provider.mjs",
     "validate:production": "node scripts/validate-production.mjs",
     "smoke:production": "node scripts/smoke-production.mjs"
   },
