@@ -13,9 +13,28 @@ export function createDeviceSession(existingUserId = "") {
     id: /^[0-9a-f-]{36}$/i.test(existingUserId) ? existingUserId : randomUUID(),
     email: "Private device workspace",
   };
-  const payload = encode({ sub: user.id, email: user.email, iat: Date.now(), v: 1 });
+  const payload = encode({ sub: user.id, email: user.email, role: "user", iat: Date.now(), v: 1 });
   const signature = createHmac("sha256", secret()).update(payload).digest("base64url");
   return { access_token: `${payload}.${signature}`, user };
+}
+
+export function adminAccessReady() {
+  return sessionTokensReady() && String(process.env.ADMIN_ACCESS_KEY || "").length >= 24;
+}
+
+export function verifyAdminAccessKey(value) {
+  if (!adminAccessReady() || typeof value !== "string") return false;
+  const expected = Buffer.from(String(process.env.ADMIN_ACCESS_KEY));
+  const received = Buffer.from(value);
+  return received.length === expected.length && timingSafeEqual(received, expected);
+}
+
+export function createAdminSession() {
+  if (!adminAccessReady()) throw new Error("ADMIN_ACCESS_KEY must contain at least 24 characters.");
+  const user = { id: "platform-admin", email: "IntentOS administrator", role: "admin" };
+  const payload = encode({ sub: user.id, email: user.email, role: user.role, iat: Date.now(), exp: Date.now() + 8 * 60 * 60 * 1000, v: 1 });
+  const signature = createHmac("sha256", secret()).update(payload).digest("base64url");
+  return { access_token: `${payload}.${signature}`, expires_in: 28800, user };
 }
 
 export function verifyDeviceSession(token) {
@@ -28,7 +47,14 @@ export function verifyDeviceSession(token) {
   if (received.length !== expected.length || !timingSafeEqual(received, expected)) return null;
   try {
     const decoded = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    if (!/^[0-9a-f-]{36}$/i.test(decoded.sub) || decoded.v !== 1) return null;
-    return { id: decoded.sub, email: decoded.email || "Private device workspace" };
+    const normalUser = /^[0-9a-f-]{36}$/i.test(decoded.sub) && decoded.role !== "admin";
+    const administrator = decoded.sub === "platform-admin" && decoded.role === "admin";
+    if ((!normalUser && !administrator) || decoded.v !== 1 || (decoded.exp && decoded.exp <= Date.now())) return null;
+    return { id: decoded.sub, email: decoded.email || "Private device workspace", role: administrator ? "admin" : "user" };
   } catch { return null; }
+}
+
+export function verifyAdminSession(token) {
+  const user = verifyDeviceSession(token);
+  return user?.role === "admin" ? user : null;
 }

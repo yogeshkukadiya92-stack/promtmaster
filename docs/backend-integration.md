@@ -8,6 +8,8 @@ IntentOS now exposes a server API and keeps a safe browser fallback:
 - `OPENAI_API_KEY` present: `/api/generate` uses the OpenAI Responses API with a strict JSON Schema.
 - Supabase credentials absent: assets persist in versioned browser storage.
 - Supabase credentials present: the server verifies the Bearer token with Supabase Auth before cloud reads, writes, or deletes.
+- `MONGODB_URI`, `AUTH_SECRET`, and `VITE_AUTH_MODE=mongodb` present: private-device users and all workspace records persist in MongoDB.
+- `ADMIN_ACCESS_KEY` present with MongoDB: the protected Auth & Data Control panel is enabled.
 
 ## Local configuration
 
@@ -16,6 +18,8 @@ IntentOS now exposes a server API and keeps a safe browser fallback:
 3. Add the public `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` values for browser authentication. Never use the service-role key in a `VITE_` variable.
 4. Start the API with `npm run api`.
 5. Start the dashboard with `npm run dev -- --host 0.0.0.0 --port 4173 --strictPort`.
+
+For MongoDB production, use separate random values for `AUTH_SECRET` (32+ characters) and `ADMIN_ACCESS_KEY` (24+ characters). Both are server-only and must never use a `VITE_` prefix.
 
 ## API contracts
 
@@ -49,6 +53,16 @@ Requires a valid Supabase Bearer token. Returns the authenticated user's latest 
 ### `DELETE /api/assets/:id`
 
 Requires a valid Supabase Bearer token. Deletes only an asset owned by the verified user.
+
+### Admin auth and data control
+
+- `POST /api/admin/session`: exchanges the server-managed access key for an eight-hour signed admin token. Failed attempts are rate-limited per IP.
+- `GET /api/admin/overview`: returns protected user status, activity, asset counts, analytics event counts, and backup counts.
+- `PATCH /api/admin/users/:id`: renames a workspace or suspends/reactivates its current device session while retaining saved data.
+- `POST /api/admin/users/:id/backups`: creates a checksum-backed MongoDB snapshot, capped at 8 MB.
+- `GET /api/admin/users/:id/export`: downloads the user's scoped records as JSON and writes an admin audit event.
+
+Admin access keys are never persisted in browser storage. Only the short-lived signed token is kept in `sessionStorage` and is cleared when the panel is locked or the server returns `401`.
 
 ## Database migration
 

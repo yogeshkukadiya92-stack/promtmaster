@@ -10,7 +10,7 @@ import { createEmailProvider } from "./email-provider.mjs";
 import { createStripeProvider } from "./stripe-provider.mjs";
 import { createAgentPlanner } from "./agent-planner.mjs";
 import { encryptProviderKey, infrastructureVaultReady } from "./infrastructure-vault.mjs";
-import { createDeviceSession, sessionTokensReady, verifyDeviceSession } from "./session-token.mjs";
+import { adminAccessReady, createAdminSession, createDeviceSession, sessionTokensReady, verifyAdminAccessKey, verifyAdminSession } from "./session-token.mjs";
 
 const app = express();
 const port = Number(process.env.PORT || process.env.API_PORT || 8787);
@@ -28,6 +28,7 @@ async function authenticate(request) {
 }
 
 app.disable("x-powered-by");
+app.set("trust proxy", 1);
 app.use((request,response,next)=>{const requestId=randomUUID();request.requestId=requestId;response.setHeader("x-request-id",requestId);response.setHeader("x-content-type-options","nosniff");response.setHeader("x-frame-options","DENY");response.setHeader("referrer-policy","no-referrer");response.setHeader("permissions-policy","camera=(), microphone=(), geolocation=()");const apiRequest=request.path.startsWith("/api/")||request.path.startsWith("/scim/");response.setHeader("content-security-policy",apiRequest?"default-src 'none'; frame-ancestors 'none'; base-uri 'none'":"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");response.on("finish",()=>{if(!repository||!request.path.startsWith("/api/"))return;const raw=`${request.baseUrl||""}${request.route?.path||request.path}`;const routeName=raw.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi,":id").replace(/\/\d+(?=\/|$)/g,"/:id").slice(0,120);repository.recordServiceRequestSample({routeName,method:request.method,statusCode:response.statusCode,durationMs:Math.min(300000,Math.max(0,Math.round(performance.now()-request.startedAt))),requestId}).catch(error=>console.error("sla_sample_failed",{message:error?.message}));});request.startedAt=performance.now();next();});
 app.post("/api/payments/webhook", express.raw({ type: "application/json", limit: "256kb" }), async (request, response) => {
   if (!stripeProvider) return response.status(503).json({ error: "Payments are not configured." });
@@ -48,8 +49,58 @@ app.post("/api/auth/session", async (request, response) => {
   if (!sessionTokensReady() || repository?.name !== "mongodb") return response.status(503).json({ error: "MongoDB device sessions are not configured." });
   const authorization = request.header("authorization") || "";
   const currentToken = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
-  const currentUser = verifyDeviceSession(currentToken);
-  return response.status(currentUser ? 200 : 201).json({ session: currentUser ? { access_token: currentToken, user: currentUser } : createDeviceSession() });
+  const currentUser = await repository.verifyUser(currentToken);
+  if (currentToken && !currentUser) return response.status(401).json({ error: "This device session is unavailable or suspended.", code: "SESSION_UNAVAILABLE" });
+  const session = currentUser ? { access_token: currentToken, user: currentUser } : createDeviceSession();
+  if (!currentUser) await repository.verifyUser(session.access_token);
+  return response.status(currentUser ? 200 : 201).json({ session });
+});
+
+const adminAttempts = new Map();
+app.post("/api/admin/session", async (request, response) => {
+  if (repository?.name !== "mongodb" || !adminAccessReady()) return response.status(503).json({ error: "Admin access is not configured." });
+  const key = request.ip || "unknown", current = adminAttempts.get(key) || { count: 0, resetAt: Date.now() + 15 * 60 * 1000 };
+  if (current.resetAt <= Date.now()) { current.count = 0; current.resetAt = Date.now() + 15 * 60 * 1000; }
+  if (current.count >= 8) return response.status(429).json({ error: "Too many admin sign-in attempts. Try again later." });
+  if (!verifyAdminAccessKey(request.body?.accessKey)) { current.count += 1; adminAttempts.set(key, current); return response.status(401).json({ error: "Invalid admin access key." }); }
+  adminAttempts.delete(key);
+  return response.status(201).json({ session: createAdminSession() });
+});
+
+const requireAdmin = async (request, response) => {
+  const authorization = request.header("authorization") || "", token = authorization.startsWith("Bearer ") ? authorization.slice(7) : "", admin = verifyAdminSession(token);
+  if (!admin) response.status(401).json({ error: "A valid administrator session is required.", code: "ADMIN_UNAUTHORIZED" });
+  return admin;
+};
+
+app.get("/api/admin/overview", async (request, response) => {
+  const admin = await requireAdmin(request, response); if (!admin) return;
+  const query = typeof request.query.query === "string" ? request.query.query.trim().slice(0, 80) : "", status = ["all", "active", "suspended"].includes(request.query.status) ? request.query.status : "all", offset = Math.max(0, Math.min(10000, Number.parseInt(request.query.offset, 10) || 0));
+  try { return response.json({ overview: await repository.getAdminOverview({ query, status, limit: 50, offset }) }); }
+  catch { return response.status(502).json({ error: "Admin user overview could not be loaded." }); }
+});
+
+app.patch("/api/admin/users/:id", async (request, response) => {
+  const admin = await requireAdmin(request, response); if (!admin) return;
+  if (!/^[0-9a-f-]{36}$/i.test(request.params.id)) return response.status(400).json({ error: "A valid user id is required." });
+  const status = request.body?.status, label = request.body?.label;
+  if ((status !== undefined && !["active", "suspended"].includes(status)) || (label !== undefined && (typeof label !== "string" || label.trim().length < 2 || label.length > 80))) return response.status(400).json({ error: "A valid user status or label is required." });
+  try { return response.json({ user: await repository.updateAdminUser(request.params.id, { status, label }, admin.id) }); }
+  catch (error) { return response.status(error?.status || 502).json({ error: error?.status === 404 ? error.message : "User control could not be updated." }); }
+});
+
+app.post("/api/admin/users/:id/backups", async (request, response) => {
+  const admin = await requireAdmin(request, response); if (!admin) return;
+  if (!/^[0-9a-f-]{36}$/i.test(request.params.id)) return response.status(400).json({ error: "A valid user id is required." });
+  try { return response.status(201).json({ backup: await repository.createAdminUserBackup(request.params.id, admin.id) }); }
+  catch (error) { return response.status(error?.status || 502).json({ error: error?.message || "User backup could not be created." }); }
+});
+
+app.get("/api/admin/users/:id/export", async (request, response) => {
+  const admin = await requireAdmin(request, response); if (!admin) return;
+  if (!/^[0-9a-f-]{36}$/i.test(request.params.id)) return response.status(400).json({ error: "A valid user id is required." });
+  try { const snapshot = await repository.exportAdminUserData(request.params.id, admin.id); response.setHeader("content-disposition", `attachment; filename="intentos-user-${request.params.id.slice(0,8)}-${new Date().toISOString().slice(0,10)}.json"`); return response.json(snapshot); }
+  catch (error) { return response.status(error?.status || 502).json({ error: error?.status === 404 ? error.message : "User data export could not be created." }); }
 });
 
 app.get("/api/health", (_request, response) => {
@@ -59,6 +110,7 @@ app.get("/api/health", (_request, response) => {
     database: repository ? { enabled: true, provider: repository.name } : { enabled: false, provider: "browser-storage" },
     email: emailProvider ? { enabled: true, provider: emailProvider.name } : { enabled: false, provider: "manual-link" },
     payments: stripeProvider ? { enabled: true, provider: stripeProvider.name, apiVersion: stripeProvider.apiVersion } : { enabled: false, provider: "test-mode" },
+    admin: { enabled: repository?.name === "mongodb" && adminAccessReady() },
   });
 });
 app.get("/api/readiness",(_request,response)=>{const checks={database:Boolean(repository),aiProvider:Boolean(aiProvider),emailProvider:Boolean(emailProvider),payments:Boolean(stripeProvider),encryptionVault:infrastructureVaultReady};const critical=checks.database&&checks.encryptionVault;return response.status(critical?200:503).json({status:critical?"ready":"attention",checks,timestamp:new Date().toISOString()});});
