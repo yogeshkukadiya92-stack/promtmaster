@@ -1,0 +1,21 @@
+Area,Component/File,Control Label,Control Type,Current Behavior,Expected Live Behavior,Backend/API/Route Needed,Auth/Role Needed,Status,Notes
+Creator,src/App.jsx,Generate,Button,Calls provider then an explicitly labelled local fallback,Create and persist an asset,POST /api/generate and POST /api/assets,Workspace user,Live,OpenAI remains optional
+Home,src/App.jsx,Recent asset row,Button,Rendered saved content but did not open it,Open selected saved asset,None,Workspace user,Fixing,Wire row to openAsset
+Sidebar,src/App.jsx,Help,Button,No action,Open real support documentation,External documentation URL,None,Fixing,Use a real HTTPS link
+Inspector,src/App.jsx,Configuration,Button,No action,Export current capability configuration,None,Workspace user,Fixing,Use existing JSON export
+Library,src/App.jsx,Delete,Button,Deletes browser and MongoDB asset,Delete owned asset,DELETE /api/assets/:id,Workspace user,Live,
+Library,src/App.jsx,Share,Form,Persists workspace share,Share owned asset,POST /api/workspace/shares,Workspace user,Live,
+Marketplace,src/App.jsx,Curated catalog,Cards,Static catalog was presented as live,Show only published data unless an explicit development flag enables fixtures,Marketplace persistence,Public,Fixing,Gate fixtures
+Marketplace,src/App.jsx,Secure checkout,Button,Fell back to a fake local purchase when Stripe was absent,Only unlock after verified Stripe webhook entitlement,POST /api/payments/checkout,Workspace user,Fixing,Remove test purchase fallback
+Publishing,src/App.jsx,Create and submit listing,Buttons,Persists in localStorage only,Persist creator listing and moderation state,Marketplace listing API,Creator,Blocked,Backend marketplace schema still required
+Moderation,src/App.jsx,Approve or reject,Buttons,Changes localStorage only,Admin-only auditable moderation API,Marketplace moderation API,Admin,Blocked,Role contract required
+Reports,src/App.jsx,Submit and triage report,Buttons,Changes localStorage only,Persist confidential report and admin decision,Marketplace reports API,User/Admin,Blocked,Role contract required
+Earnings,src/App.jsx,Configure payout account,Button,No action,Start Stripe Connect onboarding,Stripe Accounts API,Creator,Blocked,Stripe credentials and Connect API required
+Execution,src/App.jsx,Run agent,Button,Fell back to simulated local execution when cloud failed,Create a durable run or show a clear error,POST /api/agent-runs,Workspace user,Fixing,Worker service also required
+Execution,src/App.jsx,Approve/reject run,Buttons,Cloud action exists with local simulation fallback,Record authenticated decision,POST /api/agent-runs/:id/decision,Workspace user,Live when worker is online,
+Settings,src/App.jsx,Lifecycle controls,Forms,Production URL incorrectly targeted localhost,Use same-origin Railway API,/api/growth-operations,Workspace owner,Fixing,
+Settings,src/App.jsx,Launch controls,Forms,Production URL incorrectly targeted localhost,Use same-origin Railway API,/api/launch,Workspace owner,Fixing,
+Settings,src/App.jsx,SLA and recovery,Buttons,Production URL incorrectly targeted localhost,Use same-origin Railway API,/api/sla and /api/recovery-verifications,Workspace owner,Fixing,
+Admin,src/App.jsx,Admin login,Form,Exchanges server key for an eight-hour token,Open protected admin control,POST /api/admin/session,Admin,Live,Rate limited
+Admin,src/App.jsx,Suspend/reactivate user,Button,Persists status and audit event,Enforce access state,PATCH /api/admin/users/:id,Admin,Live,
+Admin,src/App.jsx,Backup/export,Buttons,Creates MongoDB snapshot or downloads scoped JSON,Retain and export user data,POST backups and GET export,Admin,Live,

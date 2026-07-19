@@ -60,7 +60,7 @@ import { marketplaceAssets, marketplaceCategories } from "./lib/marketplace.js";
 import { loadListings, newListing, saveListings, scanListing } from "./lib/publishing.js";
 import { averageRating, loadReports, loadReviews, saveReports, saveReviews } from "./lib/community.js";
 import { createCheckoutSession, loadCloudEntitlements, loadPurchases, money, PLATFORM_FEE_RATE, savePurchases } from "./lib/commerce.js";
-import { cancelCloudExecution, cancelExecution, createAgentSchedule, createCloudExecution, createExecution, decideActionCloudExecution, decideCloudExecution, deleteAgentMemory, deleteAgentSchedule, finishExecution, loadAgentExecutions, loadAgentMemories, loadAgentOperations, loadAgentSchedules, loadCloudAgentExecutions, retryCloudExecution, saveAgentExecutions, setAgentScheduleActive } from "./lib/execution.js";
+import { createAgentSchedule, createCloudExecution, decideActionCloudExecution, decideCloudExecution, deleteAgentMemory, deleteAgentSchedule, loadAgentExecutions, loadAgentMemories, loadAgentOperations, loadAgentSchedules, loadCloudAgentExecutions, retryCloudExecution, saveAgentExecutions, setAgentScheduleActive, cancelCloudExecution } from "./lib/execution.js";
 import { acceptCloudInvitation, deleteCloudAsset, exportAsset, inviteCloudMember, loadAssets, loadCloudAssets, loadCloudWorkspace, loadCollaboration, loadRunHistory, loadTestSuites, loadVersionHistory, removeCloudMember, resendCloudInvitation, saveAssets, saveCloudAsset, saveCollaboration, saveRunHistory, saveTestSuites, saveVersionHistory, shareCloudAsset, updateCloudMember } from "./lib/storage.js";
 import { downloadAuditExport, loadGovernance, saveGovernance } from "./lib/governance.js";
 import { loadIdentity, rotateScimToken, saveIdentity } from "./lib/identity.js";
@@ -80,46 +80,7 @@ const modes = [
   { id: "agent", label: "Agent", icon: Briefcase },
 ];
 
-const recentItems = [
-  { title: "Create a launch campaign for a sustainable skincare brand", type: "Agent", time: "2m ago", icon: Sparkle },
-  { title: "Write onboarding flow copy for a productivity app", type: "Prompt", time: "1h ago", icon: ChatCircleDots },
-  { title: "Customer research synthesis skill", type: "Skill", time: "3h ago", icon: Wrench },
-  { title: "Summarize competitor positioning", type: "Prompt", time: "Yesterday", icon: ChatCircleDots },
-  { title: "Lead qualification agent for SaaS inbound", type: "Agent", time: "2d ago", icon: Briefcase },
-];
-
-const outline = [
-  {
-    title: "Goal",
-    icon: Target,
-    tone: "prompt",
-    body: "Drive awareness and sign-ups for the new sustainable skincare brand launch.",
-  },
-  {
-    title: "Audience",
-    icon: UsersThree,
-    tone: "blue",
-    body: "Eco-conscious consumers, ages 20–35, interested in clean beauty.",
-  },
-  {
-    title: "Strategy",
-    icon: ListChecks,
-    tone: "skill",
-    bullets: ["Positioning & messaging", "Content & channel plan", "Influencer & PR outreach", "Launch timeline", "Measurement & optimization"],
-  },
-  {
-    title: "Execution Plan",
-    icon: ArrowRight,
-    tone: "agent",
-    steps: ["Pre-launch: Tease & build community", "Launch: Multi-channel campaign", "Post-launch: UGC & reviews", "Optimize & scale"],
-  },
-  {
-    title: "Deliverables",
-    icon: Database,
-    tone: "prompt",
-    checks: ["Campaign brief", "Content calendar", "Email sequences", "Social posts", "Influencer outreach list", "Performance dashboard"],
-  },
-];
+const curatedCatalogEnabled = import.meta.env.DEV && import.meta.env.VITE_ENABLE_CURATED_CATALOG === "true";
 
 function Brand() {
   return (
@@ -170,7 +131,7 @@ function Sidebar({ mobileOpen, onClose, view, setView, assetCount, session, onOp
         <div className="utility-nav">
           <NavItem icon={ShieldCheck} active={view === "admin"} onClick={() => navigate("admin")}>Admin</NavItem>
           <NavItem icon={Gear} active={view === "settings"} onClick={() => navigate("settings")}>Settings</NavItem>
-          <NavItem icon={Question}>Help</NavItem>
+          <NavItem icon={Question} active={view === "help"} onClick={() => navigate("help")}>Help</NavItem>
           <button type="button" className="workspace-switcher" onClick={onOpenAuth}>
             <span className="workspace-avatar">{session?.user?.email?.slice(0, 2).toUpperCase() || "YP"}</span>
             <span>{session?.user?.email || "Sign in to sync"}</span>
@@ -284,7 +245,7 @@ function Composer({ value, onChange, mode, onModeChange, isGenerating, onGenerat
   );
 }
 
-function RecentWork({ items, onViewAll }) {
+function RecentWork({ items, onViewAll, onOpen }) {
   return (
     <section className="recent-section">
       <header className="section-heading">
@@ -292,15 +253,15 @@ function RecentWork({ items, onViewAll }) {
         <button type="button" onClick={onViewAll}>View all <ArrowRight size={15} aria-hidden="true" /></button>
       </header>
       <div className="recent-list">
-        {items.map(({ title, type, time, icon: Icon }, index) => (
-          <button type="button" className={`recent-row type-${type.toLowerCase()}`} key={`${title}-${index}`}>
+        {items.length ? items.map(({ title, type, time, icon: Icon, asset }, index) => (
+          <button type="button" className={`recent-row type-${type.toLowerCase()}`} onClick={() => onOpen(asset)} key={`${title}-${index}`}>
             <Icon className="recent-icon" size={24} weight="regular" aria-hidden="true" />
             <span className="recent-title">{title}</span>
             <span className="recent-type">{type}</span>
             <time>{time}</time>
             <span className="row-menu" aria-label={`More options for ${title}`}>•••</span>
           </button>
-        ))}
+        )) : <div className="recent-empty"><Books size={24} weight="duotone" /><span>Your saved capabilities will appear here.</span></div>}
       </div>
     </section>
   );
@@ -329,6 +290,7 @@ function OutlineItem({ item }) {
 }
 
 function Inspector({ tab, setTab, asset }) {
+  const dynamicOutline = asset?.sections?.map((section, index) => ({ title: section.label, icon: index === 0 ? Target : index === 1 ? ListChecks : index === 2 ? CirclesFour : Database, tone: asset.type === "Prompt" ? "prompt" : asset.type === "Skill" ? "skill" : "agent", body: section.content })) || [];
   return (
     <aside className="inspector" aria-label="Generated capability preview">
       <div className="inspector-tabs" role="tablist">
@@ -346,26 +308,26 @@ function Inspector({ tab, setTab, asset }) {
         ))}
       </div>
 
-      {tab === "outline" ? (
+      {!asset ? <div className="inspector-empty"><Sparkle size={30} weight="duotone" /><h3>No capability selected</h3><p>Create or open a saved capability to inspect its real configuration.</p></div> : tab === "outline" ? (
         <div className="inspector-content">
           <p className="inspector-intro">Live outline of the AI asset to be generated.</p>
-          <p className="detected">Auto-detected as: <strong>{asset?.type || "Agent"}</strong></p>
-          <div className="outline-list">{outline.map((item) => <OutlineItem item={item} key={item.title} />)}</div>
-          <button type="button" className="configuration-row"><BracketsCurly size={22} aria-hidden="true" />Configuration<CaretDown size={17} aria-hidden="true" /></button>
+          <p className="detected">Configured as: <strong>{asset.type}</strong></p>
+          <div className="outline-list">{dynamicOutline.map((item) => <OutlineItem item={item} key={item.title} />)}</div>
+          <button type="button" className="configuration-row" onClick={() => exportAsset(asset)}><BracketsCurly size={22} aria-hidden="true" />Export configuration<DownloadSimple size={17} aria-hidden="true" /></button>
         </div>
       ) : (
         <div className="result-content">
           <div className="result-icon"><Robot size={32} weight="duotone" aria-hidden="true" /></div>
-          <span className="result-label">Generated {asset?.type || "agent"}</span>
-          <h3>{asset?.title || "Sustainable Skincare Launch Strategist"}</h3>
-          <p>{asset?.summary || "Plans and coordinates a focused multi-channel product launch for eco-conscious beauty audiences."}</p>
-          {(asset?.sections || []).slice(0, 3).map((section, index) => (
+          <span className="result-label">Generated {asset.type}</span>
+          <h3>{asset.title}</h3>
+          <p>{asset.summary}</p>
+          {asset.sections.slice(0, 3).map((section, index) => (
             <div className="result-block" key={section.label}>
               {index === 0 ? <Lightbulb size={20} /> : <CirclesFour size={20} />}
               <div><strong>{section.label}</strong><span>{section.content}</span></div>
             </div>
           ))}
-          {asset ? <button type="button" className="open-agent-button" onClick={() => exportAsset(asset)}>Export JSON <ArrowRight size={18} /></button> : null}
+          <button type="button" className="open-agent-button" onClick={() => exportAsset(asset)}>Export JSON <ArrowRight size={18} /></button>
         </div>
       )}
     </aside>
@@ -413,9 +375,9 @@ function ReleasePromotionPanel({assets,accessToken}) {
   return <section className="release-panel"><header><div><h2>Environment promotion</h2><p>Submit an immutable staging snapshot, approve production, or restore a previous release.</p></div><span>{production.length} production</span></header>{accessToken?<><div className="release-compose"><select value={assetId} onChange={(event)=>setAssetId(event.target.value)}>{assets.map((asset)=><option value={asset.id} key={asset.id}>{asset.title} · v{asset.version}</option>)}</select><button type="button" disabled={busy||!assetId||pending.some((item)=>item.assetId===assetId)} onClick={()=>act(()=>requestPromotion(accessToken,assetId))}><Flag size={14}/> Submit to staging</button>{rollback?<button type="button" className="release-rollback" disabled={busy} onClick={()=>act(()=>rollbackRelease(accessToken,rollback.id))}><ClockCounterClockwise size={14}/> Roll back v{rollback.version}</button>:null}</div>{pending.map((release)=>{const asset=assets.find((item)=>item.id===release.assetId);return <article className="release-review" key={release.id}><div><strong>{asset?.title||"Asset"} · v{release.version}</strong><span>Staging snapshot awaiting owner approval</span></div><button type="button" onClick={()=>act(()=>decidePromotion(accessToken,release.id,"reject"))}>Reject</button><button type="button" className="release-approve" onClick={()=>act(()=>decidePromotion(accessToken,release.id,"approve"))}><Check size={13}/> Promote</button></article>;})}</>:<div className="release-empty"><ShieldCheck size={21}/><span>Sign in to manage controlled production releases.</span></div>}</section>;
 }
 
-const buildCommunityCatalog = (publishedListings) => [...publishedListings.map((listing) => ({ id: `published-${listing.id}`, type: listing.type, category: listing.category, title: listing.title, summary: listing.description, creator: "Community Creator", rating: 5, installs: 0, price: listing.cost === "Paid" ? 999 : 0, version: 1, sourceIntent: listing.description, sections: [{ label: "Permissions", content: listing.permissions.join(", ") }, { label: "Platform", content: listing.platform }, { label: "Cost", content: listing.cost }] })), ...marketplaceAssets].map((asset) => ({ ...asset, price: asset.price ?? ({ "cinematic-storyboard": 899, "product-spec": 1499 }[asset.id] || 0) }));
+const buildCommunityCatalog = (publishedListings) => [...publishedListings.map((listing) => ({ id: `published-${listing.id}`, type: listing.type, category: listing.category, title: listing.title, summary: listing.description, creator: "Community Creator", rating: 0, installs: 0, price: listing.cost === "Paid" ? 999 : 0, version: 1, sourceIntent: listing.description, sections: [{ label: "Permissions", content: listing.permissions.join(", ") }, { label: "Platform", content: listing.platform }, { label: "Cost", content: listing.cost }] })), ...(curatedCatalogEnabled ? marketplaceAssets : [])].map((asset) => ({ ...asset, price: asset.price ?? ({ "cinematic-storyboard": 899, "product-spec": 1499 }[asset.id] || 0) }));
 
-function MarketplaceView({ installedAssets, publishedListings, reviews, purchases, accessToken, onReview, onReport, onPurchase, onInstall, onOpenInstalled, onOpenCreator }) {
+function MarketplaceView({ installedAssets, publishedListings, reviews, purchases, accessToken, onReview, onReport, onInstall, onOpenInstalled, onOpenCreator }) {
   const [query, setQuery] = useState("");
   const [type, setType] = useState("All");
   const [category, setCategory] = useState("All categories");
@@ -444,24 +406,24 @@ function MarketplaceView({ installedAssets, publishedListings, reviews, purchase
   };
 
   return <section className="marketplace-view">
-    <header className="marketplace-header"><div><h1>Capability Marketplace</h1><p>Discover proven Prompts, Skills, and Agents. Fork any capability into your workspace.</p></div><div className="marketplace-total"><strong>{catalog.length}</strong><span>live capabilities</span></div></header>
-    <article className="marketplace-featured">
+    <header className="marketplace-header"><div><h1>Capability Marketplace</h1><p>Discover published Prompts, Skills, and Agents. Fork any capability into your workspace.</p></div><div className="marketplace-total"><strong>{catalog.length}</strong><span>published capabilities</span></div></header>
+    {featured ? <article className="marketplace-featured">
       <div><span className="featured-label"><Sparkle size={15} weight="fill" /> Editor’s choice</span><h2>{featured.title}</h2><p>{featured.summary}</p><div className="marketplace-meta"><span>{featured.type}</span><span>{featured.category}</span><span><Star size={14} weight="fill" /> {featured.rating}</span></div><button type="button" onClick={() => setSelected(featured)}>Explore capability <ArrowRight size={17} /></button></div>
       <div className="featured-orbit" aria-hidden="true"><Robot size={56} weight="duotone" /><i /><i /></div>
-    </article>
+    </article> : null}
     <div className="marketplace-toolbar">
       <label className="marketplace-search"><span className="sr-only">Search marketplace</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search capabilities, creators, or categories…" /></label>
       <select aria-label="Category" value={category} onChange={(event) => setCategory(event.target.value)}><option>All categories</option>{marketplaceCategories.map((item) => <option key={item}>{item}</option>)}</select>
     </div>
     <div className="filter-tabs marketplace-tabs" role="tablist" aria-label="Marketplace asset type">{["All", "Prompt", "Skill", "Agent"].map((item) => <button type="button" role="tab" aria-selected={type === item} className={type === item ? "active" : ""} onClick={() => setType(item)} key={item}>{item}</button>)}</div>
-    <div className="marketplace-result-heading"><h2>{query ? `Results for “${query}”` : "Curated for you"}</h2><span>{visible.length} results</span></div>
+    <div className="marketplace-result-heading"><h2>{query ? `Results for “${query}”` : "Published capabilities"}</h2><span>{visible.length} results</span></div>
     {visible.length ? <div className="marketplace-grid">{visible.map((asset) => {
       const installed = installedIds.has(asset.id);
       const Icon = asset.type === "Prompt" ? ChatCircleDots : asset.type === "Skill" ? Wrench : Briefcase;
       return <article className={`marketplace-card market-${asset.type.toLowerCase()}`} key={asset.id}><div className="marketplace-card-top"><div className="marketplace-icon"><Icon size={24} weight="duotone" /></div><span>{asset.price ? money(asset.price) : asset.type}</span></div><div className="marketplace-card-copy"><span>{asset.category}</span><h3>{asset.title}</h3><p>{asset.summary}</p></div><div className="marketplace-card-stats"><span><Star size={14} weight="fill" /> {asset.rating}</span><span>{asset.installs.toLocaleString()} installs</span></div><footer><span>by {asset.creator}</span><button type="button" onClick={() => setSelected(asset)}>{installed ? "Installed" : purchases.some((item) => item.assetId === asset.id) ? "Purchased" : "View details"}</button></footer></article>;
-    })}</div> : <div className="empty-marketplace"><Funnel size={34} weight="duotone" /><h2>No matching capabilities</h2><p>Try another keyword or remove a filter.</p></div>}
+    })}</div> : <div className="empty-marketplace"><Funnel size={34} weight="duotone" /><h2>{catalog.length ? "No matching capabilities" : "No published capabilities yet"}</h2><p>{catalog.length ? "Try another keyword or remove a filter." : "Approved creator listings will appear here."}</p></div>}
     {selected ? <div className="dialog-backdrop marketplace-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelected(null); }}><section className="marketplace-detail" role="dialog" aria-modal="true" aria-labelledby="marketplace-detail-title"><button type="button" className="dialog-close" onClick={() => setSelected(null)} aria-label="Close marketplace details"><X size={20} /></button><div className="detail-type"><span>{selected.type}</span><span>{selected.category}</span></div><h2 id="marketplace-detail-title">{selected.title}</h2><p>{selected.summary}</p><div className="detail-author"><button type="button" onClick={() => onOpenCreator(selected.creator)}>{selected.creator} <ArrowRight size={13} /></button><span><Star size={14} weight="fill" /> {selected.rating} · {selected.installs.toLocaleString()} installs</span></div><div className="detail-sections">{selected.sections.map((section) => <article key={section.label}><strong>{section.label}</strong><p>{section.content}</p></article>)}</div>{installedIds.has(selected.id) || selected.installedAsset ? <button type="button" className="marketplace-install installed" onClick={() => onOpenInstalled(selected.installedAsset || installedAssets.find((asset) => asset.marketplaceSourceId === selected.id))}><Check size={18} weight="bold" /> Open installed capability</button> : <button type="button" className="marketplace-install" onClick={() => install(selected)}><PlusSquare size={18} weight="bold" /> Install & fork to Library</button>}<small>Creates your own editable copy. The original template stays unchanged.</small><section className="community-panel"><div className="community-tabs"><button type="button" className={communityMode === "reviews" ? "active" : ""} onClick={() => setCommunityMode("reviews")}>Ratings & reviews</button><button type="button" className={communityMode === "report" ? "active" : ""} onClick={() => setCommunityMode("report")}>Report</button></div>{communityMode === "reviews" ? <><div className="rating-input">{[1,2,3,4,5].map((value) => <button type="button" aria-label={`${value} stars`} onClick={() => setReviewRating(value)} key={value}><Star size={18} weight={value <= reviewRating ? "fill" : "regular"} /></button>)}</div><textarea aria-label="Review" value={reviewText} onChange={(event) => setReviewText(event.target.value)} placeholder="Share a useful experience with this capability…" /><button type="button" className="community-submit" disabled={reviewText.trim().length < 12} onClick={() => { onReview(selected.id, reviewRating, reviewText); setReviewText(""); }}>Publish review</button><div className="review-list">{reviews.filter((item) => item.assetId === selected.id).slice(0,3).map((review) => <article key={review.id}><span><Star size={12} weight="fill" /> {review.rating}.0</span><p>{review.text}</p><small>Verified workspace user</small></article>)}</div></> : <><select aria-label="Report reason" value={reportReason} onChange={(event) => setReportReason(event.target.value)}><option value="">Select a reason</option><option>Unsafe behavior</option><option>Misleading description</option><option>Copyright concern</option><option>Spam or low quality</option></select><button type="button" className="community-submit report" disabled={!reportReason} onClick={() => { onReport(selected.id, reportReason); setReportReason(""); setCommunityMode("reviews"); }}>Submit confidential report</button></>}</section></section></div> : null}
-    {checkoutAsset ? <div className="dialog-backdrop marketplace-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setCheckoutAsset(null); }}><section className="checkout-dialog" role="dialog" aria-modal="true" aria-labelledby="checkout-title"><button type="button" className="dialog-close" onClick={() => setCheckoutAsset(null)} aria-label="Close checkout"><X size={20} /></button><Wallet size={30} weight="duotone" /><span>Secure checkout</span><h2 id="checkout-title">Complete your purchase</h2><div className="checkout-product"><strong>{checkoutAsset.title}</strong><span>{checkoutAsset.type} by {checkoutAsset.creator}</span></div><div className="checkout-total"><span>Total</span><strong>{money(checkoutAsset.price)}</strong></div><p>Payment opens in Stripe-hosted Checkout. Verified purchases unlock from your secure account entitlement.</p>{checkoutError ? <div className="auth-notice">{checkoutError}</div> : null}<button type="button" className="checkout-pay" onClick={async () => { setCheckoutError(""); try { const checkoutSession = await createCheckoutSession(checkoutAsset.id, accessToken); if (checkoutSession?.url) window.location.assign(checkoutSession.url); else { onPurchase(checkoutAsset); setCheckoutAsset(null); } } catch (error) { setCheckoutError(error.message); } }}>Continue to secure checkout <ArrowRight size={16} /></button></section></div> : null}
+    {checkoutAsset ? <div className="dialog-backdrop marketplace-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setCheckoutAsset(null); }}><section className="checkout-dialog" role="dialog" aria-modal="true" aria-labelledby="checkout-title"><button type="button" className="dialog-close" onClick={() => setCheckoutAsset(null)} aria-label="Close checkout"><X size={20} /></button><Wallet size={30} weight="duotone" /><span>Secure checkout</span><h2 id="checkout-title">Complete your purchase</h2><div className="checkout-product"><strong>{checkoutAsset.title}</strong><span>{checkoutAsset.type} by {checkoutAsset.creator}</span></div><div className="checkout-total"><span>Total</span><strong>{money(checkoutAsset.price)}</strong></div><p>Payment opens in Stripe-hosted Checkout. Verified purchases unlock from your secure account entitlement.</p>{checkoutError ? <div className="auth-notice">{checkoutError}</div> : null}<button type="button" className="checkout-pay" onClick={async () => { setCheckoutError(""); try { const checkoutSession = await createCheckoutSession(checkoutAsset.id, accessToken); if (!checkoutSession?.url) throw new Error("Secure payments are not configured yet."); window.location.assign(checkoutSession.url); } catch (error) { setCheckoutError(error.message); } }}>Continue to secure checkout <ArrowRight size={16} /></button></section></div> : null}
   </section>;
 }
 
@@ -554,11 +516,11 @@ function ReportTriageView({ reports, publishedListings, onChange }) {
     </div></section>;
 }
 
-function EarningsView({ purchases }) {
+function EarningsView({ purchases, paymentsEnabled }) {
   const gross = purchases.reduce((sum,item) => sum + item.amount, 0);
   const fees = Math.round(gross * PLATFORM_FEE_RATE);
   const net = gross - fees;
-  return <section className="earnings-view"><header className="earnings-header"><div><h1>Creator Earnings</h1><p>Track paid capability sales, platform fees, and creator payout readiness.</p></div><span><ShieldCheck size={17} /> Stripe Connect ready</span></header><div className="earnings-metrics"><article><span>Gross sales</span><strong>{money(gross)}</strong><small>{purchases.length} successful purchases</small></article><article><span>Platform fee · 15%</span><strong>{money(fees)}</strong><small>Marketplace operations and trust</small></article><article className="net"><span>Creator net</span><strong>{money(net)}</strong><small>Available after payment settlement</small></article></div><section className="connect-banner"><div className="connect-icon"><Wallet size={27} weight="duotone" /></div><div><h2>Creator payout account</h2><p>Production onboarding uses Stripe Accounts v2 with explicit responsibility, dashboard, and capability settings.</p></div><button type="button">Configure payout account <ArrowRight size={15} /></button></section><section className="transaction-panel"><header><div><h2>Sales ledger</h2><p>Completed Checkout Session entitlements.</p></div><span>{purchases.length} transactions</span></header>{purchases.length ? <div className="transaction-list">{purchases.map((purchase) => <article key={purchase.id}><div className="sale-icon"><Money size={19} /></div><div><strong>{purchase.title}</strong><span>{purchase.creator} · {purchase.mode}</span></div><time>{new Date(purchase.createdAt).toLocaleDateString()}</time><strong>{money(purchase.amount)}</strong><span className="paid-status">Paid</span></article>)}</div> : <div className="moderation-empty"><Wallet size={34} weight="duotone" /><h3>No paid sales yet</h3><p>Test purchases from Marketplace will appear here.</p></div>}</section><footer className="payment-architecture"><ShieldCheck size={19} /><div><strong>Secure payment architecture</strong><span>Stripe-hosted Checkout Sessions · destination charges · Accounts v2 creator onboarding · webhook-verified entitlements</span></div></footer></section>;
+  return <section className="earnings-view"><header className="earnings-header"><div><h1>Creator Earnings</h1><p>Track paid capability sales, platform fees, and creator payout readiness.</p></div><span><ShieldCheck size={17} /> {paymentsEnabled ? "Stripe payments connected" : "Payments not configured"}</span></header><div className="earnings-metrics"><article><span>Gross sales</span><strong>{money(gross)}</strong><small>{purchases.length} verified purchases</small></article><article><span>Platform fee · 15%</span><strong>{money(fees)}</strong><small>Marketplace operations and trust</small></article><article className="net"><span>Creator net</span><strong>{money(net)}</strong><small>Available after payment settlement</small></article></div><section className="connect-banner"><div className="connect-icon"><Wallet size={27} weight="duotone" /></div><div><h2>Creator payout account</h2><p>{paymentsEnabled ? "Stripe checkout is connected. Creator payout onboarding requires a separate Stripe Connect implementation." : "Configure Stripe server credentials before accepting payments or onboarding payout accounts."}</p></div><button type="button" disabled title={paymentsEnabled ? "Stripe Connect onboarding is not implemented yet" : "Configure Stripe server credentials first"}>Payout onboarding unavailable</button></section><section className="transaction-panel"><header><div><h2>Sales ledger</h2><p>Webhook-verified Checkout Session entitlements.</p></div><span>{purchases.length} transactions</span></header>{purchases.length ? <div className="transaction-list">{purchases.map((purchase) => <article key={purchase.id}><div className="sale-icon"><Money size={19} /></div><div><strong>{purchase.title}</strong><span>{purchase.creator} · {purchase.mode}</span></div><time>{new Date(purchase.createdAt).toLocaleDateString()}</time><strong>{money(purchase.amount)}</strong><span className="paid-status">Paid</span></article>)}</div> : <div className="moderation-empty"><Wallet size={34} weight="duotone" /><h3>No verified sales yet</h3><p>Successful webhook-verified purchases will appear here.</p></div>}</section><footer className="payment-architecture"><ShieldCheck size={19} /><div><strong>Secure payment architecture</strong><span>Stripe-hosted Checkout Sessions · webhook-verified entitlements · no local test unlocks</span></div></footer></section>;
 }
 
 function ScoreRing({ score }) {
@@ -680,17 +642,20 @@ function EvaluationLab({ asset, input, cases, onCasesChange, mode, setMode, onTe
 
 function AgentExecutionView({ assets, accessToken }) {
   const agents = assets.filter((asset) => asset.type === "Agent");
-  const fallbackAgent = { id: "market-research-agent", title: "Market Research Agent" };
-  const availableAgents = agents.length ? agents : [fallbackAgent];
+  const availableAgents = agents.length ? agents : [{ id: "", title: "No Agent assets available" }];
   const [agentId, setAgentId] = useState(availableAgents[0].id);
-  const [mission, setMission] = useState("Research emerging AI startups and summarize the strongest market signals.");
+  const [mission, setMission] = useState("");
   const [permissions, setPermissions] = useState({ web: true, workspace: true, external: false });
   const [runs, setRuns] = useState(() => loadAgentExecutions());
   const [activeRun, setActiveRun] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [runError, setRunError] = useState("");
   const agent = availableAgents.find((item) => item.id === agentId) || availableAgents[0];
 
   useEffect(() => saveAgentExecutions(runs), [runs]);
+  useEffect(() => {
+    if (!agents.some((item) => item.id === agentId)) setAgentId(agents[0]?.id || "");
+  }, [assets, agentId]);
   useEffect(() => {
     if (!accessToken) return;
     let active = true;
@@ -713,37 +678,49 @@ function AgentExecutionView({ assets, accessToken }) {
     return () => window.clearInterval(interval);
   }, [accessToken, activeRun?.id, activeRun?.stage, activeRun?.cloud]);
   const start = async () => {
-    if (mission.trim().length < 12) return;
+    if (!accessToken) return setRunError("Sign in before creating a durable agent run.");
+    if (!agent?.id || mission.trim().length < 12) return;
     setBusy(true);
+    setRunError("");
     const key = crypto.randomUUID();
     const cloudRun = await createCloudExecution(accessToken, agent, mission.trim(), permissions, key).catch(() => null);
-    setActiveRun(cloudRun || createExecution(agent, mission.trim(), permissions));
+    if (cloudRun) setActiveRun(cloudRun);
+    else setRunError("The cloud run could not be created. No simulated execution was started.");
     setBusy(false);
   };
   const decide = async (approved) => {
+    if (!activeRun?.cloud || !accessToken) return setRunError("This run is not connected to the production execution service.");
     setBusy(true);
-    const cloudRun = activeRun.cloud ? await decideCloudExecution(accessToken, activeRun.id, approved).catch(() => null) : null;
-    const completed = cloudRun || finishExecution(activeRun, approved);
-    setActiveRun(completed);
-    setRuns((current) => [completed, ...current.filter((run) => run.id !== completed.id)].slice(0, 20));
+    setRunError("");
+    const completed = await decideCloudExecution(accessToken, activeRun.id, approved).catch(() => null);
+    if (completed) {
+      setActiveRun(completed);
+      setRuns((current) => [completed, ...current.filter((run) => run.id !== completed.id)].slice(0, 20));
+    } else setRunError("The approval decision could not be saved. The run was not advanced locally.");
     setBusy(false);
   };
   const cancel = async () => {
     if (!activeRun || !["approval", "tool_approval", "running"].includes(activeRun.stage)) return;
+    if (!activeRun.cloud || !accessToken) return setRunError("This run cannot be cancelled because it is not connected to the production service.");
     setBusy(true);
-    const cloudRun = activeRun.cloud ? await cancelCloudExecution(accessToken, activeRun.id).catch(() => null) : null;
-    const cancelled = cloudRun || cancelExecution(activeRun);
-    setActiveRun(cancelled);
-    setRuns((current) => [cancelled, ...current.filter((run) => run.id !== cancelled.id)].slice(0, 20));
+    setRunError("");
+    const cancelled = await cancelCloudExecution(accessToken, activeRun.id).catch(() => null);
+    if (cancelled) {
+      setActiveRun(cancelled);
+      setRuns((current) => [cancelled, ...current.filter((run) => run.id !== cancelled.id)].slice(0, 20));
+    } else setRunError("The production service did not confirm cancellation.");
     setBusy(false);
   };
   const retry = async (run) => {
+    if (!run.cloud || !accessToken) return setRunError("Only durable cloud runs can be retried. Start a new authenticated run instead.");
     setBusy(true);
-    let resumed = run.cloud ? await retryCloudExecution(accessToken, run.id).catch(() => null) : null;
-    if (!resumed && run.cloud) resumed = await createCloudExecution(accessToken, { id: run.agentId, title: run.agentTitle }, run.mission, run.permissions, crypto.randomUUID()).catch(() => null);
-    if (!resumed) resumed = createExecution({ id: run.agentId, title: run.agentTitle }, run.mission, run.permissions);
-    setActiveRun(resumed);
-    setRuns((current) => resumed.id === run.id ? [resumed, ...current.filter((item) => item.id !== run.id)].slice(0, 20) : current);
+    setRunError("");
+    let resumed = await retryCloudExecution(accessToken, run.id).catch(() => null);
+    if (!resumed) resumed = await createCloudExecution(accessToken, { id: run.agentId, title: run.agentTitle }, run.mission, run.permissions, crypto.randomUUID()).catch(() => null);
+    if (resumed) {
+      setActiveRun(resumed);
+      setRuns((current) => resumed.id === run.id ? [resumed, ...current.filter((item) => item.id !== run.id)].slice(0, 20) : [resumed, ...current].slice(0, 20));
+    } else setRunError("The production service could not retry this run. No simulated run was created.");
     setBusy(false);
   };
   const decideAction = async (approved) => {
@@ -777,7 +754,8 @@ function AgentExecutionView({ assets, accessToken }) {
 
   return <section className="execution-view">
     <header className="execution-header"><div><h1>Agent Execution</h1><p>Run trusted agent workflows with explicit permissions, approval gates, and a complete audit trail.</p></div><div className="execution-header-actions">{["approval","running","tool_approval"].includes(stage) ? <button type="button" onClick={cancel} disabled={busy}><X size={14} /> Cancel run</button> : null}<span className={`execution-status ${stage}`}>{stage === "approval" ? "Awaiting approval" : stage === "tool_approval" ? "Action approval" : stage === "running" ? "Worker running" : stage === "completed" ? "Completed" : stage === "failed" ? "Failed · retry ready" : stage === "rejected" ? "Rejected" : stage === "cancelled" ? "Cancelled" : "Ready"}</span></div></header>
-    <div className="execution-controls"><label><span>Selected agent</span><select value={agentId} onChange={(event) => setAgentId(event.target.value)}>{availableAgents.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select></label><label className="mission-field"><span>Mission</span><input value={mission} onChange={(event) => setMission(event.target.value)} placeholder="Give this agent a clear outcome…" /></label><button type="button" onClick={start} disabled={busy || mission.trim().length < 12 || ["approval","tool_approval"].includes(stage)}>{busy ? <span className="spinner" /> : <Play size={16} weight="fill" />} {busy ? "Saving run…" : "Run agent"}</button></div>
+    <div className="execution-controls"><label><span>Selected agent</span><select value={agentId} onChange={(event) => setAgentId(event.target.value)}>{availableAgents.map((item) => <option value={item.id} key={item.id || "empty"}>{item.title}</option>)}</select></label><label className="mission-field"><span>Mission</span><input value={mission} onChange={(event) => setMission(event.target.value)} placeholder="Give this agent a clear outcome…" /></label><button type="button" onClick={start} disabled={busy || !accessToken || !agent?.id || mission.trim().length < 12 || ["approval","tool_approval"].includes(stage)}>{busy ? <span className="spinner" /> : <Play size={16} weight="fill" />} {busy ? "Saving run…" : "Run agent"}</button></div>
+    {runError ? <div className="execution-error" role="alert"><Warning size={16} /> {runError}</div> : null}
     <div className="execution-grid">
       <section className="timeline-panel"><header><h2>Execution timeline</h2><span>{activeRun ? activeRun.id.slice(0, 8) : "No active run"}</span></header><div className="execution-steps">{steps.map((step, index) => { const state = stepState(step.id); return <article className={`${state} ${step.id === "approval" || (step.id === "execute" && stage === "tool_approval") ? "approval-step" : ""}`} key={step.id}><div className="step-marker">{state === "complete" ? <Check size={16} weight="bold" /> : index + 1}</div><div><strong>{step.label}</strong><p>{step.detail}</p>{step.id === "approval" && stage === "approval" ? <div className="approval-actions"><button type="button" className="reject" onClick={() => decide(false)}><X size={15} /> Reject</button><button type="button" className="approve" onClick={() => decide(true)}><Check size={15} weight="bold" /> Approve & execute</button></div> : null}{step.id === "execute" && stage === "tool_approval" && activeRun.actionApproval ? <div className="scoped-approval"><span>{activeRun.actionApproval.toolName} · {activeRun.actionApproval.riskLevel}</span><code>{activeRun.actionApproval.input?.content || JSON.stringify(activeRun.actionApproval.input)}</code><div className="approval-actions"><button type="button" className="reject" onClick={() => decideAction(false)}><X size={15} /> Reject action</button><button type="button" className="approve" onClick={() => decideAction(true)}><Check size={15} weight="bold" /> Approve once</button></div></div> : null}</div></article>; })}</div></section>
       <aside className="run-inspector"><header><h2>Run inspector</h2><ShieldCheck size={18} /></header><section><h3>Tool permissions</h3>{[["web","Web research"],["workspace","Workspace read"],["external","External actions"]].map(([id,label]) => <label className="permission-row" key={id}><span><Robot size={15} /> {label}</span><input type="checkbox" checked={permissions[id]} onChange={() => setPermissions((current) => ({ ...current, [id]: !current[id] }))} disabled={["approval","tool_approval"].includes(stage)} /><i>{permissions[id] ? "Allowed" : "Blocked"}</i></label>)}</section><section><h3>Run budget</h3><div className="budget-line"><span>Token limit</span><strong>100,000</strong></div><div className="budget-meter"><i style={{ width: activeRun ? "18%" : "0%" }} /></div><div className="budget-line"><span>Maximum cost</span><strong>₹40</strong></div></section>{activeRun?.plan ? <section className="plan-evidence"><h3>Execution intelligence</h3><div><span>PLAN · {activeRun.plan.engine}</span><p>{activeRun.plan.summary}</p><strong>{activeRun.plan.calls.length} tool action{activeRun.plan.calls.length === 1 ? "" : "s"}</strong></div>{activeRun.verification ? <div className={activeRun.verification.passed ? "passed" : "failed"}><span>{activeRun.verification.passed ? "VERIFIED" : "CHECK FAILED"} · {activeRun.verification.engine}</span><p>{activeRun.verification.summary}</p></div> : null}</section> : null}<section className="event-log"><h3>Event log</h3>{activeRun ? activeRun.events.slice(0, 6).map((event) => <div key={event.id}><i className={event.tone} /><span>{event.text}</span><time>{new Date(event.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></div>) : <p>Events appear when a run starts.</p>}</section></aside>
@@ -903,16 +881,28 @@ function AdminPanel({ configured }) {
   return <section className="admin-view"><header className="admin-header"><div><h1>Auth & data control</h1><p>Manage private device users, access state, MongoDB assets and recoverable snapshots.</p></div><div><button type="button" onClick={refresh}><ClockCounterClockwise size={16} /> Refresh</button><button type="button" className="admin-logout" onClick={logout}>Lock panel</button></div></header>{overview ? <><div className="admin-metrics">{[["Registered users", overview.metrics.totalUsers, UsersThree], ["Active · 24h", overview.metrics.active24h, UserCheck], ["Saved assets", overview.metrics.totalAssets, Books], ["Data backups", overview.metrics.totalBackups, Archive]].map(([label, value, Icon]) => <article key={label}><Icon size={21} weight="duotone" /><span>{label}</span><strong>{value}</strong></article>)}</div><section className="admin-directory"><header><div><h2>User directory</h2><p>{overview.pagination.total} matching workspace{overview.pagination.total === 1 ? "" : "s"} · {overview.metrics.suspendedUsers} suspended</p></div><div className="admin-filters"><label><MagnifyingGlass size={15} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search label or user ID" /></label><select value={filter} onChange={event => setFilter(event.target.value)} aria-label="Filter users by status"><option value="all">All users</option><option value="active">Active</option><option value="suspended">Suspended</option></select></div></header><div className="admin-table-head"><span>User workspace</span><span>Status</span><span>Assets</span><span>Events</span><span>Backups</span><span>Activity</span><span>Controls</span></div>{overview.users.length ? overview.users.map(user => <AdminUserRow key={user.id} user={user} busy={busy} onStatus={(id, status) => update(id, { status }, status === "active" ? "User access restored." : "User suspended; existing data was preserved.")} onRename={(id, label) => update(id, { label }, "User label updated.")} onBackup={backup} onExport={exportUser} />) : <div className="admin-empty"><UsersThree size={28} /><p>No users match this filter.</p></div>}</section></> : <div className="admin-loading"><span className="spinner" /><p>Loading protected user records…</p></div>}{notice ? <div className="admin-notice" role="status"><Check size={15} /> {notice}<button type="button" onClick={() => setNotice("")} aria-label="Dismiss"><X size={13} /></button></div> : null}</section>;
 }
 
+function HelpView({ status }) {
+  const checks = [
+    ["MongoDB persistence", Boolean(status?.database?.enabled), status?.database?.provider || "Not connected"],
+    ["AI generation", Boolean(status?.ai?.enabled), status?.ai?.enabled ? status.ai.model : "Deterministic local generator"],
+    ["Admin control", Boolean(status?.admin?.enabled), status?.admin?.enabled ? "Protected access enabled" : "Not configured"],
+    ["Payments", Boolean(status?.payments?.enabled), status?.payments?.enabled ? status.payments.provider : "Not configured"],
+    ["Email delivery", Boolean(status?.email?.enabled), status?.email?.enabled ? status.email.provider : "Manual links only"],
+  ];
+  return <section className="help-view"><header><div><span>SUPPORT & READINESS</span><h1>Help center</h1><p>Understand what is connected, what remains optional, and where to report an issue.</p></div><Question size={30} weight="duotone" /></header><div className="help-grid"><article><h2>Production status</h2><div className="help-checks">{checks.map(([label, ready, detail]) => <div key={label}><i className={ready ? "ready" : "optional"}>{ready ? <Check size={13} /> : <Warning size={13} />}</i><span><strong>{label}</strong><small>{detail}</small></span><b>{ready ? "Ready" : "Optional"}</b></div>)}</div></article><article><h2>Getting started</h2><ol><li>Describe a useful outcome in the short intent field.</li><li>Review and save the generated prompt, skill, or agent.</li><li>Test representative inputs in Playground before publishing.</li><li>Use Agent Execution only for approved, durable cloud runs.</li></ol><a href="https://github.com/yogeshkukadiya92-stack/promtmaster/issues" target="_blank" rel="noreferrer"><ChatCircleDots size={16} /> Report an issue on GitHub</a></article></div></section>;
+}
+
 function SettingsView({ status, session, onRefresh }) {
   const integrations = [
-    { id: "ai", name: "OpenAI generation", icon: Robot, ready: Boolean(status?.ai?.enabled), detail: status?.ai?.enabled ? status.ai.model : "Local structured fallback", variables: "OPENAI_API_KEY · OPENAI_MODEL" },
-    { id: "database", name: status?.database?.provider === "mongodb" ? "MongoDB workspace" : "Supabase workspace", icon: Database, ready: Boolean(status?.database?.enabled), detail: status?.database?.enabled ? "Cloud persistence enabled" : "Browser storage active", variables: status?.database?.provider === "mongodb" ? "MONGODB_URI · MONGODB_DATABASE" : "SUPABASE_URL · SUPABASE_SERVICE_ROLE_KEY" },
+    { id: "ai", name: "OpenAI generation", icon: Robot, ready: Boolean(status?.ai?.enabled), detail: status?.ai?.enabled ? status.ai.model : "Optional · deterministic generator active", variables: "OPENAI_API_KEY · OPENAI_MODEL" },
+    { id: "database", name: status?.database?.provider === "mongodb" ? "MongoDB workspace" : "Supabase workspace", icon: Database, ready: Boolean(status?.database?.enabled), detail: status?.database?.enabled ? "Cloud persistence enabled" : "Required for durable accounts and assets", variables: status?.database?.provider === "mongodb" ? "MONGODB_URI · MONGODB_DATABASE" : "SUPABASE_URL · SUPABASE_SERVICE_ROLE_KEY" },
     { id: "auth", name: authMode === "mongodb" ? "Private device authentication" : "Supabase authentication", icon: ShieldCheck, ready: authConfigured, detail: session ? (authMode === "mongodb" ? "Private MongoDB session active" : `Signed in as ${session.user.email}`) : authConfigured ? "Ready for sign-in" : "Authentication not configured", variables: authMode === "mongodb" ? "AUTH_SECRET · VITE_AUTH_MODE" : "VITE_SUPABASE_URL · VITE_SUPABASE_PUBLISHABLE_KEY" },
     { id: "email", name: "Invitation email", icon: EnvelopeSimple, ready: Boolean(status?.email?.enabled), detail: status?.email?.enabled ? `${status.email.provider} delivery enabled` : "Secure manual links active", variables: "RESEND_API_KEY · INVITE_EMAIL_FROM · APP_URL" },
+    { id: "payments", name: "Marketplace payments", icon: Money, ready: Boolean(status?.payments?.enabled), detail: status?.payments?.enabled ? `${status.payments.provider} checkout enabled` : "Purchases disabled until Stripe is configured", variables: "STRIPE_SECRET_KEY · STRIPE_WEBHOOK_SECRET" },
   ];
   const readyCount = integrations.filter((item) => item.ready).length;
   const readiness = Math.round((readyCount / integrations.length) * 100);
-  return <section className="settings-view"><header className="settings-header"><div><h1>System Settings</h1><p>Review integrations and production deployment readiness.</p></div><button type="button" onClick={onRefresh}><ClockCounterClockwise size={16} /> Refresh checks</button></header><div className="readiness-panel"><div className="readiness-score" style={{ "--readiness": `${readiness * 3.6}deg` }}><strong>{readiness}%</strong><span>ready</span></div><div><h2>{readiness === 100 ? "Production integrations ready" : `${integrations.length - readyCount} integration${integrations.length - readyCount === 1 ? "" : "s"} need configuration`}</h2><p>The product remains fully usable with local fallbacks while providers are configured.</p></div></div><div className="integration-list">{integrations.map(({ icon: Icon, ...integration }) => <article key={integration.id}><div className={`integration-icon ${integration.ready ? "ready" : "local"}`}><Icon size={21} /></div><div><h2>{integration.name}</h2><p>{integration.detail}</p><code>{integration.variables}</code></div><span className={integration.ready ? "ready" : "local"}>{integration.ready ? "Configured" : "Fallback"}</span></article>)}</div><GovernancePanel accessToken={session?.access_token} /><IdentityPanel accessToken={session?.access_token} /><InfrastructurePanel accessToken={session?.access_token} /><EnterpriseControlCenter accessToken={session?.access_token} /><ReliabilityCenter accessToken={session?.access_token} /><ActivationPanel accessToken={session?.access_token} /><LaunchCommandCenter accessToken={session?.access_token} /><GrowthOperationsPanel accessToken={session?.access_token} /><section className="deployment-checklist"><header><h2>Deployment checklist</h2><p>Phase 6 production launch and growth controls are complete.</p></header><div>{(authMode === "mongodb" ? ["MongoDB service linked with MONGODB_URI", "Set ENTERPRISE_KEY_ENCRYPTION_SECRET server-side", "Set APP_URL to the public HTTPS origin", "Keep AUTH_SECRET private and backed up", "Configure optional OpenAI, Resend and Stripe providers"] : ["Apply migrations through 021_lifecycle_growth_experiments.sql", "Set ENTERPRISE_KEY_ENCRYPTION_SECRET server-side", "Set APP_URL to the public HTTPS origin", "Configure Supabase authentication redirects", "Run API and worker as separate production processes"]).map((item, index) => <div key={item}><span>{index + 1}</span><p>{item}</p></div>)}</div></section></section>;
+  return <section className="settings-view"><header className="settings-header"><div><h1>System Settings</h1><p>Review integrations and production deployment readiness.</p></div><button type="button" onClick={onRefresh}><ClockCounterClockwise size={16} /> Refresh checks</button></header><div className="readiness-panel"><div className="readiness-score" style={{ "--readiness": `${readiness * 3.6}deg` }}><strong>{readiness}%</strong><span>ready</span></div><div><h2>{readiness === 100 ? "All optional providers are configured" : `${integrations.length - readyCount} integration${integrations.length - readyCount === 1 ? "" : "s"} need configuration`}</h2><p>Core creation remains available; provider-dependent actions stay visibly disabled until configured.</p></div></div><div className="integration-list">{integrations.map(({ icon: Icon, ...integration }) => <article key={integration.id}><div className={`integration-icon ${integration.ready ? "ready" : "local"}`}><Icon size={21} /></div><div><h2>{integration.name}</h2><p>{integration.detail}</p><code>{integration.variables}</code></div><span className={integration.ready ? "ready" : "local"}>{integration.ready ? "Configured" : "Not configured"}</span></article>)}</div><GovernancePanel accessToken={session?.access_token} /><IdentityPanel accessToken={session?.access_token} /><InfrastructurePanel accessToken={session?.access_token} /><EnterpriseControlCenter accessToken={session?.access_token} /><ReliabilityCenter accessToken={session?.access_token} /><ActivationPanel accessToken={session?.access_token} /><LaunchCommandCenter accessToken={session?.access_token} /><GrowthOperationsPanel accessToken={session?.access_token} /><section className="deployment-checklist"><header><h2>Deployment checklist</h2><p>Phase 6 production launch and growth controls are complete.</p></header><div>{(authMode === "mongodb" ? ["MongoDB service linked with MONGODB_URI", "Set ENTERPRISE_KEY_ENCRYPTION_SECRET server-side", "Set APP_URL to the public HTTPS origin", "Keep AUTH_SECRET private and backed up", "Configure optional OpenAI, Resend and Stripe providers"] : ["Apply migrations through 021_lifecycle_growth_experiments.sql", "Set ENTERPRISE_KEY_ENCRYPTION_SECRET server-side", "Set APP_URL to the public HTTPS origin", "Configure Supabase authentication redirects", "Run API and worker as separate production processes"]).map((item, index) => <div key={item}><span>{index + 1}</span><p>{item}</p></div>)}</div></section></section>;
 }
 
 function EnterpriseControlCenter({accessToken}){const[usage,setUsage]=useState(null);const[busy,setBusy]=useState("");useEffect(()=>{if(accessToken)loadEnterpriseUsage(accessToken).then(setUsage);else setUsage(null);},[accessToken]);const toggle=async(key)=>{setBusy(key);const updated=await updateEnterpriseFlag(accessToken,key,!usage.flags[key]);if(updated)setUsage(updated);setBusy("");};const labels={agent_execution:["Agent execution","Allow approved agent runs"],production_promotion:["Production promotion","Allow staged assets to reach production"],marketplace_publish:["Marketplace publishing","Allow public capability submissions"]};return <section className="enterprise-center"><header><div><h2>Enterprise control center</h2><p>30-day organization usage and server-enforced runtime capabilities.</p></div><ChartLineUp size={22} weight="duotone"/></header>{accessToken&&usage?<><div className="enterprise-metrics">{[["Assets",usage.report.assets],["Agent runs",usage.report.runs],["Tool calls",usage.report.toolCalls],["Tracked cost",`₹${(usage.report.costPaise/100).toFixed(2)}`]].map(([label,value])=><article key={label}><span>{label}</span><strong>{value}</strong></article>)}</div><div className="enterprise-flags">{Object.entries(labels).map(([key,[title,detail]])=><label key={key}><span><strong>{title}</strong><small>{detail}</small></span><input type="checkbox" checked={usage.flags[key]} disabled={busy===key} onChange={()=>toggle(key)}/><i>{usage.flags[key]?"Enabled":"Disabled"}</i></label>)}</div><div className="enterprise-actions"><span>{usage.report.completedRuns} completed · {usage.report.failedRuns} failed · last {usage.report.periodDays} days</span><button type="button" onClick={()=>downloadEnterpriseUsage(accessToken)}><BracketsCurly size={14}/> Export JSON</button></div></>:<div className="governance-empty"><ChartLineUp size={23}/><span>{accessToken?"Workspace owner usage is unavailable.":"Sign in as a workspace owner to open enterprise controls."}</span></div>}</section>;}
@@ -983,7 +973,7 @@ function VersionComparison({ before, after }) {
 }
 
 export function App() {
-  const [intent, setIntent] = useState("Create a launch campaign for a sustainable skincare brand");
+  const [intent, setIntent] = useState("");
   const [mode, setMode] = useState("auto");
   const [tab, setTab] = useState("outline");
   const [isGenerating, setIsGenerating] = useState(false);
@@ -1105,6 +1095,7 @@ export function App() {
     type: asset.type,
     time: "Saved",
     icon: asset.type === "Prompt" ? ChatCircleDots : asset.type === "Skill" ? Wrench : Briefcase,
+    asset,
   })), [assets]);
 
   const generate = async () => {
@@ -1162,8 +1153,6 @@ export function App() {
   };
   const addReview = (assetId, rating, reviewText) => setReviews((current) => [{ id: crypto.randomUUID(), assetId, rating, text: reviewText.trim(), createdAt: new Date().toISOString() }, ...current]);
   const addReport = (assetId, reason) => setReports((current) => [{ id: crypto.randomUUID(), assetId, reason, status: "Open", createdAt: new Date().toISOString() }, ...current]);
-  const completePurchase = (asset) => setPurchases((current) => current.some((item) => item.assetId === asset.id) ? current : [{ id: crypto.randomUUID(), assetId: asset.id, title: asset.title, creator: asset.creator, amount: asset.price, mode: "Stripe test", createdAt: new Date().toISOString() }, ...current]);
-
   const updateTestSuite = (assetId, cases) => setTestSuites((current) => ({ ...current, [assetId]: cases }));
   const recordRun = (assetId, run) => setRunHistory((current) => ({ ...current, [assetId]: [run, ...(current[assetId] || [])].slice(0, 20) }));
   const logWorkspaceActivity = (message) => ({ id: crypto.randomUUID(), message, createdAt: new Date().toISOString() });
@@ -1216,8 +1205,8 @@ export function App() {
           </button>
         </header>
         <div className="ambient-light" aria-hidden="true" />
-        <div className={`workspace-content ${["library", "marketplace", "creators", "publishing", "moderation", "reports", "earnings", "playground", "execution", "analytics", "workspace", "settings", "admin"].includes(view) ? "library-content" : ""}`}>
-          {view === "library" ? <LibraryView assets={assets} accessToken={session?.access_token} onOpen={openAsset} onDelete={deleteAsset} onShare={(asset) => setCollaborationDialog({ open: true, mode: "share", asset })} /> : view === "marketplace" ? <MarketplaceView installedAssets={assets} publishedListings={listings.filter((item) => item.status === "Approved")} reviews={reviews} purchases={purchases} accessToken={session?.access_token} onReview={addReview} onReport={addReport} onPurchase={completePurchase} onInstall={installMarketplaceAsset} onOpenInstalled={(asset) => { if (asset) openAsset(asset); }} onOpenCreator={(creator) => { setSelectedCreator(creator); setView("creators"); }} /> : view === "creators" ? <CreatorsView publishedListings={listings.filter((item) => item.status === "Approved")} reviews={reviews} selectedCreator={selectedCreator} onOpenMarketplace={() => setView("marketplace")} /> : view === "publishing" ? <PublishingView assets={assets} listings={listings} onChange={setListings} accessToken={session?.access_token} /> : view === "moderation" ? <ModerationView listings={listings} onChange={setListings} onOpenMarketplace={() => setView("marketplace")} /> : view === "reports" ? <ReportTriageView reports={reports} publishedListings={listings.filter((item) => item.status === "Approved")} onChange={setReports} /> : view === "earnings" ? <EarningsView purchases={purchases} /> : view === "playground" ? <PlaygroundView assets={assets} versions={versions} testSuites={testSuites} runHistory={runHistory} onTestSuitesChange={updateTestSuite} onRunRecorded={recordRun} onImprove={persistImprovement} accessToken={session?.access_token} /> : view === "execution" ? <AgentExecutionView assets={assets} accessToken={session?.access_token} /> : view === "analytics" ? <AnalyticsView assets={assets} runHistory={runHistory} /> : view === "workspace" ? <WorkspaceView workspace={workspace} assets={assets} onInvite={() => setCollaborationDialog({ open: true, mode: "invite", asset: null })} onRoleChange={changeMemberRole} onRemove={removeMember} onResend={resendInvitation} onMarkAllRead={() => setWorkspace((current) => ({ ...current, readActivityIds: current.activity.map((item) => item.id) }))} /> : view === "settings" ? <SettingsView status={providerStatus} session={session} onRefresh={() => getProviderStatus().then(setProviderStatus)} /> : view === "admin" ? <AdminPanel configured={providerStatus?.admin?.enabled} /> : <>
+        <div className={`workspace-content ${["library", "marketplace", "creators", "publishing", "moderation", "reports", "earnings", "playground", "execution", "analytics", "workspace", "settings", "admin", "help"].includes(view) ? "library-content" : ""}`}>
+          {view === "library" ? <LibraryView assets={assets} accessToken={session?.access_token} onOpen={openAsset} onDelete={deleteAsset} onShare={(asset) => setCollaborationDialog({ open: true, mode: "share", asset })} /> : view === "marketplace" ? <MarketplaceView installedAssets={assets} publishedListings={listings.filter((item) => item.status === "Approved")} reviews={reviews} purchases={purchases} accessToken={session?.access_token} onReview={addReview} onReport={addReport} onInstall={installMarketplaceAsset} onOpenInstalled={(asset) => { if (asset) openAsset(asset); }} onOpenCreator={(creator) => { setSelectedCreator(creator); setView("creators"); }} /> : view === "creators" ? <CreatorsView publishedListings={listings.filter((item) => item.status === "Approved")} reviews={reviews} selectedCreator={selectedCreator} onOpenMarketplace={() => setView("marketplace")} /> : view === "publishing" ? <PublishingView assets={assets} listings={listings} onChange={setListings} accessToken={session?.access_token} /> : view === "moderation" ? <ModerationView listings={listings} onChange={setListings} onOpenMarketplace={() => setView("marketplace")} /> : view === "reports" ? <ReportTriageView reports={reports} publishedListings={listings.filter((item) => item.status === "Approved")} onChange={setReports} /> : view === "earnings" ? <EarningsView purchases={purchases} paymentsEnabled={Boolean(providerStatus?.payments?.enabled)} /> : view === "playground" ? <PlaygroundView assets={assets} versions={versions} testSuites={testSuites} runHistory={runHistory} onTestSuitesChange={updateTestSuite} onRunRecorded={recordRun} onImprove={persistImprovement} accessToken={session?.access_token} /> : view === "execution" ? <AgentExecutionView assets={assets} accessToken={session?.access_token} /> : view === "analytics" ? <AnalyticsView assets={assets} runHistory={runHistory} /> : view === "workspace" ? <WorkspaceView workspace={workspace} assets={assets} onInvite={() => setCollaborationDialog({ open: true, mode: "invite", asset: null })} onRoleChange={changeMemberRole} onRemove={removeMember} onResend={resendInvitation} onMarkAllRead={() => setWorkspace((current) => ({ ...current, readActivityIds: current.activity.map((item) => item.id) }))} /> : view === "settings" ? <SettingsView status={providerStatus} session={session} onRefresh={() => getProviderStatus().then(setProviderStatus)} /> : view === "admin" ? <AdminPanel configured={providerStatus?.admin?.enabled} /> : view === "help" ? <HelpView status={providerStatus} /> : <>
             <header className="page-header">
               <div><h1>What do you want to build?</h1><p>Type one idea. We’ll turn it into a professional Prompt, Skill, or Agent.</p></div>
               <div className={`provider-status ${providerStatus?.ai?.enabled ? "live" : "local"}`} title={providerStatus?.ai?.enabled ? providerStatus.ai.model : "Local structured generator"}>
@@ -1226,7 +1215,7 @@ export function App() {
               </div>
             </header>
             <Composer value={intent} onChange={setIntent} mode={mode} onModeChange={setMode} isGenerating={isGenerating} onGenerate={generate} generateLabel={growthAssignment?.label||"Generate"} />
-            <RecentWork items={recentSaved.length ? recentSaved : recentItems} onViewAll={() => setView("library")} />
+            <RecentWork items={recentSaved} onViewAll={() => setView("library")} onOpen={openAsset} />
           </>}
         </div>
       </main>
