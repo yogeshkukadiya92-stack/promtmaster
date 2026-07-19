@@ -83,6 +83,37 @@ app.post("/api/auth/login", async (request, response) => {
   catch { current.count += 1; authAttempts.set(key, current); return response.status(502).json({ error: "Sign-in service is temporarily unavailable." }); }
 });
 
+const resetAttempts = new Map();
+const resetAttempt = (request) => { const key = request.ip || "unknown", current = resetAttempts.get(key) || { count: 0, resetAt: Date.now() + 15 * 60 * 1000 }; if (current.resetAt <= Date.now()) { current.count = 0; current.resetAt = Date.now() + 15 * 60 * 1000; } current.count += 1; resetAttempts.set(key, current); return current; };
+app.post("/api/auth/forgot-password", async (request, response) => {
+  if (!sessionTokensReady() || repository?.name !== "mongodb") return response.status(503).json({ error: "MongoDB authentication is not configured." });
+  const email = typeof request.body?.email === "string" ? request.body.email.trim().toLowerCase() : "";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) return response.status(400).json({ error: "Enter a valid email address." });
+  const attempt = resetAttempt(request); if (attempt.count > 5) return response.status(429).json({ error: "Too many reset requests. Try again later." });
+  if (!emailProvider) return response.status(202).json({ accepted: true, delivery: "unavailable" });
+  try {
+    const reset = await repository.createPasswordReset(email);
+    if (reset) {
+      const baseUrl = String(process.env.APP_URL || `${request.protocol}://${request.get("host")}`).replace(/\/$/, "");
+      const resetUrl = `${baseUrl}/?reset_password=${encodeURIComponent(reset.token)}`;
+      try { await emailProvider.sendPasswordReset({ to: reset.email, name: reset.name, resetUrl, expiresAt: reset.expiresAt }); }
+      catch (error) { console.error("password_reset_email_failed", { message: error?.message, requestId: request.requestId }); }
+    }
+    return response.status(202).json({ accepted: true, delivery: "email" });
+  } catch (error) {
+    console.error("password_reset_request_failed", { message: error?.message, requestId: request.requestId });
+    return response.status(202).json({ accepted: true, delivery: "email" });
+  }
+});
+app.post("/api/auth/reset-password", async (request, response) => {
+  if (!sessionTokensReady() || repository?.name !== "mongodb") return response.status(503).json({ error: "MongoDB authentication is not configured." });
+  const token = typeof request.body?.token === "string" ? request.body.token.trim() : "", password = typeof request.body?.password === "string" ? request.body.password : "";
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token) || password.length < 10 || password.length > 128) return response.status(400).json({ error: "This reset link is invalid, or the new password is not at least 10 characters." });
+  const attempt = resetAttempt(request); if (attempt.count > 10) return response.status(429).json({ error: "Too many reset attempts. Try again later." });
+  try { const changed = await repository.resetPassword(token, password); if (!changed) return response.status(410).json({ error: "This reset link is invalid, expired, or already used." }); return response.json({ ok: true }); }
+  catch { return response.status(502).json({ error: "Password could not be changed right now." }); }
+});
+
 const adminAttempts = new Map();
 app.post("/api/admin/session", async (request, response) => {
   if (repository?.name !== "mongodb" || !adminAccessReady()) return response.status(503).json({ error: "Admin access is not configured." });

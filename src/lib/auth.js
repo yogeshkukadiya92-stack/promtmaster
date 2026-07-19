@@ -54,6 +54,23 @@ export async function registerWithPassword(name, email, password) {
   return mongoCredentials("/api/auth/register", { name, email, password });
 }
 
+export async function requestPasswordReset(email) {
+  if (!mongoAuth) throw new Error("Password reset is available on the MongoDB deployment.");
+  const response = await fetch("/api/auth/forgot-password", { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify({ email }) });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || "Password reset could not be started.");
+  return payload;
+}
+
+export async function resetPasswordWithToken(token, password) {
+  if (!mongoAuth) throw new Error("Password reset is available on the MongoDB deployment.");
+  const response = await fetch("/api/auth/reset-password", { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify({ token, password }) });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || "Password could not be changed.");
+  clearWorkspaceCache();
+  return payload;
+}
+
 export async function upgradePasswordAccount(name, email, password) {
   if (!mongoAuth) throw new Error("Account upgrade is available on the MongoDB deployment.");
   const token = window.localStorage.getItem(mongoTokenKey) || "";
