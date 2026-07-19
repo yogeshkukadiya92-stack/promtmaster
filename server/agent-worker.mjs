@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
+import { createServer } from "node:http";
 import { createSupabaseRepository } from "./supabase-repository.mjs";
 import { createMongoRepository } from "./mongo-repository.mjs";
 import { executeToolCall, registeredTools, toolRequiresApproval, toolRiskLevel } from "./tool-gateway.mjs";
@@ -20,8 +21,17 @@ let lastMemoryPurgeAt = 0;
 let lastHeartbeatAt = 0;
 let lastLifecycleAt=0;
 let stopping = false;
-process.on("SIGTERM", () => { stopping = true; });
-process.on("SIGINT", () => { stopping = true; });
+const port = Number(process.env.PORT || 0);
+const healthServer = port ? createServer((request, response) => {
+  response.setHeader("content-type", "application/json");
+  response.setHeader("x-content-type-options", "nosniff");
+  if (request.method === "GET" && request.url === "/api/health") return response.end(JSON.stringify({ ok: true, process: "agent-worker", workerName }));
+  response.statusCode = 404;
+  return response.end(JSON.stringify({ error: "Not found" }));
+}).listen(port, "0.0.0.0", () => console.log("agent_worker_health_ready", { port })) : null;
+const stop = () => { stopping = true; healthServer?.close(); };
+process.on("SIGTERM", stop);
+process.on("SIGINT", stop);
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 console.log("agent_worker_started", { workerName, pollMs, leaseSeconds, tools: registeredTools });
