@@ -5,6 +5,7 @@ import {
   Books,
   BracketsCurly,
   Briefcase,
+  Archive,
   CaretDown,
   ChatCircleDots,
   ChartLineUp,
@@ -14,6 +15,7 @@ import {
   ClockCounterClockwise,
   Code,
   Database,
+  DownloadSimple,
   EnvelopeSimple,
   Flask,
   Flag,
@@ -22,9 +24,11 @@ import {
   Gear,
   House,
   Lightbulb,
+  Key,
   ListChecks,
   Moon,
   Money,
+  MagnifyingGlass,
   PaperPlaneTilt,
   Play,
   PencilSimple,
@@ -41,6 +45,8 @@ import {
   Target,
   Trash,
   UserPlus,
+  UserCheck,
+  UserMinus,
   UsersThree,
   Wrench,
   Warning,
@@ -65,6 +71,7 @@ import { downloadRecoveryManifest, loadRecoveryVerifications, loadSla, runRecove
 import { loadActivationReport, trackActivation } from "./lib/activation.js";
 import { createBetaAccess, loadLaunchCenter, redeemBetaAccess, revokeBetaAccess, saveLaunchControl } from "./lib/launch.js";
 import { assignGrowthVariant, createExperiment, loadGrowthOperations, loadInAppLifecycle, setExperimentStatus, updateLifecycle } from "./lib/growth.js";
+import { clearAdminToken, createAdminAccess, createAdminBackup, exportAdminUser, getAdminToken, loadAdminOverview, updateAdminUser } from "./lib/admin.js";
 
 const modes = [
   { id: "auto", label: "Auto detect", icon: Sparkle },
@@ -161,6 +168,7 @@ function Sidebar({ mobileOpen, onClose, view, setView, assetCount, session, onOp
 
       <div className="sidebar-bottom">
         <div className="utility-nav">
+          <NavItem icon={ShieldCheck} active={view === "admin"} onClick={() => navigate("admin")}>Admin</NavItem>
           <NavItem icon={Gear} active={view === "settings"} onClick={() => navigate("settings")}>Settings</NavItem>
           <NavItem icon={Question}>Help</NavItem>
           <button type="button" className="workspace-switcher" onClick={onOpenAuth}>
@@ -866,6 +874,35 @@ function AnalyticsEmpty() {
   return <div className="analytics-empty"><ChartLineUp size={25} /><p>Run an asset in the Playground to populate analytics.</p></div>;
 }
 
+const adminDate = (value) => value ? new Date(value).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "Never";
+
+function AdminUserRow({ user, busy, onStatus, onBackup, onExport, onRename }) {
+  const [editing, setEditing] = useState(false), [label, setLabel] = useState(user.label || "Private device workspace");
+  const saveLabel = async () => { const clean = label.trim(); if (clean.length < 2 || clean === user.label) return setEditing(false); await onRename(user.id, clean); setEditing(false); };
+  return <div className="admin-user-row">
+    <div className="admin-user-identity"><span>{(user.label || "PW").slice(0, 2).toUpperCase()}</span><div>{editing ? <input autoFocus value={label} maxLength={80} onChange={event => setLabel(event.target.value)} onBlur={saveLabel} onKeyDown={event => { if (event.key === "Enter") saveLabel(); if (event.key === "Escape") setEditing(false); }} /> : <button type="button" onClick={() => setEditing(true)}><strong>{user.label || "Private device workspace"}</strong><small>{user.id}</small></button>}</div></div>
+    <span className={`admin-user-status ${user.status}`}>{user.status}</span>
+    <div className="admin-user-data"><strong>{user.assetCount}</strong><small>assets</small></div>
+    <div className="admin-user-data"><strong>{user.activationEvents}</strong><small>events</small></div>
+    <div className="admin-user-data"><strong>{user.backupCount}</strong><small>backups</small></div>
+    <div className="admin-user-seen"><strong>{adminDate(user.lastSeenAt)}</strong><small>Last saved {adminDate(user.lastSavedAt)}</small></div>
+    <div className="admin-user-actions"><button type="button" title="Create data backup" disabled={busy === user.id} onClick={() => onBackup(user.id)}><Archive size={16} /></button><button type="button" title="Export user data" disabled={busy === user.id} onClick={() => onExport(user.id)}><DownloadSimple size={16} /></button><button type="button" className={user.status === "active" ? "suspend" : "activate"} disabled={busy === user.id} onClick={() => onStatus(user.id, user.status === "active" ? "suspended" : "active")}>{user.status === "active" ? <UserMinus size={16} /> : <UserCheck size={16} />} {user.status === "active" ? "Suspend" : "Activate"}</button></div>
+  </div>;
+}
+
+function AdminPanel({ configured }) {
+  const [accessKey, setAccessKey] = useState(""), [authenticated, setAuthenticated] = useState(Boolean(getAdminToken())), [overview, setOverview] = useState(null), [query, setQuery] = useState(""), [filter, setFilter] = useState("all"), [busy, setBusy] = useState(""), [notice, setNotice] = useState("");
+  const refresh = async () => { if (!getAdminToken()) return; const data = await loadAdminOverview({ query, status: filter }); if (!data) { setAuthenticated(false); setOverview(null); return; } setOverview(data); };
+  useEffect(() => { if (!authenticated) return; const timer = window.setTimeout(refresh, 220); return () => window.clearTimeout(timer); }, [authenticated, query, filter]);
+  const login = async event => { event.preventDefault(); setBusy("login"); setNotice(""); try { await createAdminAccess(accessKey); setAuthenticated(true); setAccessKey(""); } catch (error) { setNotice(error.message); } setBusy(""); };
+  const update = async (id, input, success) => { setBusy(id); const changed = await updateAdminUser(id, input); if (changed) { setNotice(success); await refresh(); } else setNotice("Admin action could not be completed."); setBusy(""); };
+  const backup = async id => { setBusy(id); const result = await createAdminBackup(id); setNotice(result ? `Backup created · ${result.checksum.slice(0, 12)}…` : "Backup could not be created."); await refresh(); setBusy(""); };
+  const exportUser = async id => { setBusy(id); const ok = await exportAdminUser(id); setNotice(ok ? "User data export downloaded." : "Export could not be created."); setBusy(""); };
+  const logout = () => { clearAdminToken(); setAuthenticated(false); setOverview(null); setNotice(""); };
+  if (!authenticated) return <section className="admin-login-view"><div className="admin-login-card"><div className="admin-lock"><ShieldCheck size={32} weight="duotone" /></div><h1>Administrator access</h1><p>Control user access and protect MongoDB workspace data. The access key is exchanged for an eight-hour signed session and is never stored in the browser.</p>{configured === false ? <div className="admin-config-warning"><Warning size={16} /> Set <code>ADMIN_ACCESS_KEY</code> on the server to enable this panel.</div> : null}<form onSubmit={login}><label htmlFor="admin-access-key">Admin access key</label><div><Key size={17} /><input id="admin-access-key" type="password" required minLength={24} autoComplete="current-password" value={accessKey} onChange={event => setAccessKey(event.target.value)} placeholder="Enter server-managed access key" /></div><button type="submit" disabled={busy === "login"}>{busy === "login" ? <span className="spinner" /> : <ShieldCheck size={17} />} Open admin control</button></form>{notice ? <div className="admin-notice error" role="alert">{notice}</div> : null}</div></section>;
+  return <section className="admin-view"><header className="admin-header"><div><h1>Auth & data control</h1><p>Manage private device users, access state, MongoDB assets and recoverable snapshots.</p></div><div><button type="button" onClick={refresh}><ClockCounterClockwise size={16} /> Refresh</button><button type="button" className="admin-logout" onClick={logout}>Lock panel</button></div></header>{overview ? <><div className="admin-metrics">{[["Registered users", overview.metrics.totalUsers, UsersThree], ["Active · 24h", overview.metrics.active24h, UserCheck], ["Saved assets", overview.metrics.totalAssets, Books], ["Data backups", overview.metrics.totalBackups, Archive]].map(([label, value, Icon]) => <article key={label}><Icon size={21} weight="duotone" /><span>{label}</span><strong>{value}</strong></article>)}</div><section className="admin-directory"><header><div><h2>User directory</h2><p>{overview.pagination.total} matching workspace{overview.pagination.total === 1 ? "" : "s"} · {overview.metrics.suspendedUsers} suspended</p></div><div className="admin-filters"><label><MagnifyingGlass size={15} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search label or user ID" /></label><select value={filter} onChange={event => setFilter(event.target.value)} aria-label="Filter users by status"><option value="all">All users</option><option value="active">Active</option><option value="suspended">Suspended</option></select></div></header><div className="admin-table-head"><span>User workspace</span><span>Status</span><span>Assets</span><span>Events</span><span>Backups</span><span>Activity</span><span>Controls</span></div>{overview.users.length ? overview.users.map(user => <AdminUserRow key={user.id} user={user} busy={busy} onStatus={(id, status) => update(id, { status }, status === "active" ? "User access restored." : "User suspended; existing data was preserved.")} onRename={(id, label) => update(id, { label }, "User label updated.")} onBackup={backup} onExport={exportUser} />) : <div className="admin-empty"><UsersThree size={28} /><p>No users match this filter.</p></div>}</section></> : <div className="admin-loading"><span className="spinner" /><p>Loading protected user records…</p></div>}{notice ? <div className="admin-notice" role="status"><Check size={15} /> {notice}<button type="button" onClick={() => setNotice("")} aria-label="Dismiss"><X size={13} /></button></div> : null}</section>;
+}
+
 function SettingsView({ status, session, onRefresh }) {
   const integrations = [
     { id: "ai", name: "OpenAI generation", icon: Robot, ready: Boolean(status?.ai?.enabled), detail: status?.ai?.enabled ? status.ai.model : "Local structured fallback", variables: "OPENAI_API_KEY · OPENAI_MODEL" },
@@ -1179,8 +1216,8 @@ export function App() {
           </button>
         </header>
         <div className="ambient-light" aria-hidden="true" />
-        <div className={`workspace-content ${["library", "marketplace", "creators", "publishing", "moderation", "reports", "earnings", "playground", "execution", "analytics", "workspace", "settings"].includes(view) ? "library-content" : ""}`}>
-          {view === "library" ? <LibraryView assets={assets} accessToken={session?.access_token} onOpen={openAsset} onDelete={deleteAsset} onShare={(asset) => setCollaborationDialog({ open: true, mode: "share", asset })} /> : view === "marketplace" ? <MarketplaceView installedAssets={assets} publishedListings={listings.filter((item) => item.status === "Approved")} reviews={reviews} purchases={purchases} accessToken={session?.access_token} onReview={addReview} onReport={addReport} onPurchase={completePurchase} onInstall={installMarketplaceAsset} onOpenInstalled={(asset) => { if (asset) openAsset(asset); }} onOpenCreator={(creator) => { setSelectedCreator(creator); setView("creators"); }} /> : view === "creators" ? <CreatorsView publishedListings={listings.filter((item) => item.status === "Approved")} reviews={reviews} selectedCreator={selectedCreator} onOpenMarketplace={() => setView("marketplace")} /> : view === "publishing" ? <PublishingView assets={assets} listings={listings} onChange={setListings} accessToken={session?.access_token} /> : view === "moderation" ? <ModerationView listings={listings} onChange={setListings} onOpenMarketplace={() => setView("marketplace")} /> : view === "reports" ? <ReportTriageView reports={reports} publishedListings={listings.filter((item) => item.status === "Approved")} onChange={setReports} /> : view === "earnings" ? <EarningsView purchases={purchases} /> : view === "playground" ? <PlaygroundView assets={assets} versions={versions} testSuites={testSuites} runHistory={runHistory} onTestSuitesChange={updateTestSuite} onRunRecorded={recordRun} onImprove={persistImprovement} accessToken={session?.access_token} /> : view === "execution" ? <AgentExecutionView assets={assets} accessToken={session?.access_token} /> : view === "analytics" ? <AnalyticsView assets={assets} runHistory={runHistory} /> : view === "workspace" ? <WorkspaceView workspace={workspace} assets={assets} onInvite={() => setCollaborationDialog({ open: true, mode: "invite", asset: null })} onRoleChange={changeMemberRole} onRemove={removeMember} onResend={resendInvitation} onMarkAllRead={() => setWorkspace((current) => ({ ...current, readActivityIds: current.activity.map((item) => item.id) }))} /> : view === "settings" ? <SettingsView status={providerStatus} session={session} onRefresh={() => getProviderStatus().then(setProviderStatus)} /> : <>
+        <div className={`workspace-content ${["library", "marketplace", "creators", "publishing", "moderation", "reports", "earnings", "playground", "execution", "analytics", "workspace", "settings", "admin"].includes(view) ? "library-content" : ""}`}>
+          {view === "library" ? <LibraryView assets={assets} accessToken={session?.access_token} onOpen={openAsset} onDelete={deleteAsset} onShare={(asset) => setCollaborationDialog({ open: true, mode: "share", asset })} /> : view === "marketplace" ? <MarketplaceView installedAssets={assets} publishedListings={listings.filter((item) => item.status === "Approved")} reviews={reviews} purchases={purchases} accessToken={session?.access_token} onReview={addReview} onReport={addReport} onPurchase={completePurchase} onInstall={installMarketplaceAsset} onOpenInstalled={(asset) => { if (asset) openAsset(asset); }} onOpenCreator={(creator) => { setSelectedCreator(creator); setView("creators"); }} /> : view === "creators" ? <CreatorsView publishedListings={listings.filter((item) => item.status === "Approved")} reviews={reviews} selectedCreator={selectedCreator} onOpenMarketplace={() => setView("marketplace")} /> : view === "publishing" ? <PublishingView assets={assets} listings={listings} onChange={setListings} accessToken={session?.access_token} /> : view === "moderation" ? <ModerationView listings={listings} onChange={setListings} onOpenMarketplace={() => setView("marketplace")} /> : view === "reports" ? <ReportTriageView reports={reports} publishedListings={listings.filter((item) => item.status === "Approved")} onChange={setReports} /> : view === "earnings" ? <EarningsView purchases={purchases} /> : view === "playground" ? <PlaygroundView assets={assets} versions={versions} testSuites={testSuites} runHistory={runHistory} onTestSuitesChange={updateTestSuite} onRunRecorded={recordRun} onImprove={persistImprovement} accessToken={session?.access_token} /> : view === "execution" ? <AgentExecutionView assets={assets} accessToken={session?.access_token} /> : view === "analytics" ? <AnalyticsView assets={assets} runHistory={runHistory} /> : view === "workspace" ? <WorkspaceView workspace={workspace} assets={assets} onInvite={() => setCollaborationDialog({ open: true, mode: "invite", asset: null })} onRoleChange={changeMemberRole} onRemove={removeMember} onResend={resendInvitation} onMarkAllRead={() => setWorkspace((current) => ({ ...current, readActivityIds: current.activity.map((item) => item.id) }))} /> : view === "settings" ? <SettingsView status={providerStatus} session={session} onRefresh={() => getProviderStatus().then(setProviderStatus)} /> : view === "admin" ? <AdminPanel configured={providerStatus?.admin?.enabled} /> : <>
             <header className="page-header">
               <div><h1>What do you want to build?</h1><p>Type one idea. We’ll turn it into a professional Prompt, Skill, or Agent.</p></div>
               <div className={`provider-status ${providerStatus?.ai?.enabled ? "live" : "local"}`} title={providerStatus?.ai?.enabled ? providerStatus.ai.model : "Local structured generator"}>

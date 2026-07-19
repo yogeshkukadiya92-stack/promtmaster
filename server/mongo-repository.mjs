@@ -18,6 +18,9 @@ export function createMongoRepository() {
         db.collection("assets").createIndex({ userId: 1, updatedAt: -1 }),
         db.collection("assets").createIndex({ id: 1 }, { unique: true }),
         db.collection("workspaces").createIndex({ ownerId: 1 }, { unique: true }),
+        db.collection("users").createIndex({ id: 1 }, { unique: true }),
+        db.collection("users").createIndex({ status: 1, lastSeenAt: -1 }),
+        db.collection("user_backups").createIndex({ userId: 1, createdAt: -1 }),
         db.collection("activation_events").createIndex({ idempotencyKey: 1 }, { unique: true }),
         db.collection("service_samples").createIndex({ createdAt: 1 }, { expireAfterSeconds: 604800 }),
         db.collection("growth_assignments").createIndex({ experimentId: 1, userId: 1 }, { unique: true }),
@@ -61,10 +64,22 @@ export function createMongoRepository() {
     });
     return { periodDays: 30, primaryKpi: { name: "Tested activation rate", valuePercent: stages[0].sessions ? Number((stages[3].sessions / stages[0].sessions * 100).toFixed(1)) : 0, numerator: stages[3].sessions, denominator: stages[0].sessions }, stages, activeUsers: new Set(events.map(e => e.userId)).size, trackedSessions: new Set(events.map(e => e.sessionId)).size, totalEvents: events.length, guardrails: { generationFailureEvents: 0, privacy: "No prompt text or generated content stored" }, generatedAt: now() };
   };
+  const scopedCollections = ["assets", "workspaces", "activation_events", "audit_events", "admin_audit_events", "purchases", "agent_runs", "agent_schedules", "agent_memories", "governance", "feature_flags", "infrastructure", "recovery_manifests", "lifecycle_automations", "lifecycle_deliveries", "growth_experiments", "growth_assignments", "releases"];
+  const collectUserData = async (userId) => {
+    const db = await database();
+    const user = await db.collection("users").findOne({ id: userId }, { projection: { _id: 0 } });
+    if (!user) throw fail("User not found.");
+    const data = {};
+    for (const collection of scopedCollections) {
+      const query = collection === "workspaces" ? { ownerId: userId } : { userId };
+      data[collection] = await db.collection(collection).find(query, { projection: { _id: 0 } }).limit(10000).toArray();
+    }
+    return { schemaVersion: 1, user, exportedAt: now(), data };
+  };
 
   const repository = {
     name: "mongodb",
-    verifyUser: async token => verifyDeviceSession(token),
+    async verifyUser(token) { const user = verifyDeviceSession(token); if (!user || user.role === "admin") return null; const db = await database(), seenAt = now(); await db.collection("users").updateOne({ id: user.id }, { $setOnInsert: { id: user.id, label: "Private device workspace", email: user.email, status: "active", createdAt: seenAt }, $set: { lastSeenAt: seenAt } }, { upsert: true }); const record = await db.collection("users").findOne({ id: user.id }); return record?.status === "suspended" ? null : { ...user, label: record?.label || user.email }; },
     async ping() { const db = await database(); await db.command({ ping: 1 }); return true; },
     async list(userId) { const db = await database(); return (await db.collection("assets").find({ userId }).sort({ updatedAt: -1 }).limit(100).toArray()).map(x => x.content); },
     async save(asset, userId) { const db = await database(); await db.collection("assets").updateOne({ id: asset.id, userId }, { $set: { id: asset.id, userId, type: asset.type, title: asset.title, content: asset, updatedAt: asset.createdAt || now() } }, { upsert: true }); return asset; },
@@ -108,6 +123,10 @@ export function createMongoRepository() {
     async getAgentOperations(userId) { const db = await database(); return { workers: [], queued: await db.collection("agent_runs").countDocuments({ userId, status: "queued" }), running: await db.collection("agent_runs").countDocuments({ userId, status: "running" }), completed: await db.collection("agent_runs").countDocuments({ userId, status: "completed" }), failed: await db.collection("agent_runs").countDocuments({ userId, status: "failed" }) }; },
     async getWorkspaceIdentity() { return { ssoEnabled: false, scimEnabled: false, scimTokenLastFour: "", domains: [], users: [] }; },
     async listAssetReleases(userId) { const db = await database(); return db.collection("releases").find({ userId }).sort({ createdAt: -1 }).toArray(); },
+    async getAdminOverview({ query = "", status = "all", limit = 50, offset = 0 } = {}) { const db = await database(), match = {}; if (["active", "suspended"].includes(status)) match.status = status; if (query) { const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); match.$or = [{ label: { $regex: escaped, $options: "i" } }, { id: { $regex: escaped, $options: "i" } }]; } const [users, filtered, totalUsers, suspendedUsers, totalAssets, totalBackups] = await Promise.all([db.collection("users").find(match, { projection: { _id: 0 } }).sort({ lastSeenAt: -1 }).skip(offset).limit(limit).toArray(), db.collection("users").countDocuments(match), db.collection("users").countDocuments(), db.collection("users").countDocuments({ status: "suspended" }), db.collection("assets").countDocuments(), db.collection("user_backups").countDocuments()]); const ids = users.map(user => user.id), since = new Date(Date.now() - 86400000).toISOString(); const [assetCounts, eventCounts, backupCounts] = await Promise.all([db.collection("assets").aggregate([{ $match: { userId: { $in: ids } } }, { $group: { _id: "$userId", count: { $sum: 1 }, lastSavedAt: { $max: "$updatedAt" } } }]).toArray(), db.collection("activation_events").aggregate([{ $match: { userId: { $in: ids } } }, { $group: { _id: "$userId", count: { $sum: 1 } } }]).toArray(), db.collection("user_backups").aggregate([{ $match: { userId: { $in: ids } } }, { $group: { _id: "$userId", count: { $sum: 1 }, lastBackupAt: { $max: "$createdAt" } } }]).toArray()]); const byId = rows => new Map(rows.map(row => [row._id, row])); const assets = byId(assetCounts), events = byId(eventCounts), backups = byId(backupCounts); return { metrics: { totalUsers, active24h: await db.collection("users").countDocuments({ lastSeenAt: { $gte: since }, status: "active" }), suspendedUsers, totalAssets, totalBackups }, users: users.map(user => ({ ...user, assetCount: assets.get(user.id)?.count || 0, activationEvents: events.get(user.id)?.count || 0, backupCount: backups.get(user.id)?.count || 0, lastSavedAt: assets.get(user.id)?.lastSavedAt || null, lastBackupAt: backups.get(user.id)?.lastBackupAt || null })), pagination: { total: filtered, limit, offset, hasMore: offset + users.length < filtered }, generatedAt: now() }; },
+    async updateAdminUser(userId, input, adminId) { const db = await database(), patch = { updatedAt: now(), updatedBy: adminId }; if (["active", "suspended"].includes(input.status)) patch.status = input.status; if (typeof input.label === "string" && input.label.trim()) patch.label = input.label.trim().slice(0, 80); const result = await db.collection("users").updateOne({ id: userId }, { $set: patch }); if (!result.matchedCount) throw fail("User not found."); await db.collection("admin_audit_events").insertOne({ id: randomUUID(), adminId, action: "user.updated", userId, metadata: { status: patch.status, labelChanged: Boolean(patch.label) }, createdAt: now() }); return db.collection("users").findOne({ id: userId }, { projection: { _id: 0 } }); },
+    async createAdminUserBackup(userId, adminId) { const db = await database(), snapshot = await collectUserData(userId), encoded = JSON.stringify(snapshot); if (Buffer.byteLength(encoded) > 8 * 1024 * 1024) throw fail("User backup exceeds the 8 MB snapshot limit.", 413); const backup = { id: randomUUID(), userId, adminId, createdAt: now(), checksum: hash(encoded), sizeBytes: Buffer.byteLength(encoded), counts: Object.fromEntries(Object.entries(snapshot.data).map(([key, value]) => [key, value.length])), snapshot }; await db.collection("user_backups").insertOne(backup); await db.collection("admin_audit_events").insertOne({ id: randomUUID(), adminId, action: "user.backup_created", userId, metadata: { backupId: backup.id, checksum: backup.checksum }, createdAt: now() }); return { id: backup.id, userId, createdAt: backup.createdAt, checksum: backup.checksum, sizeBytes: backup.sizeBytes, counts: backup.counts }; },
+    async exportAdminUserData(userId, adminId) { const db = await database(), snapshot = await collectUserData(userId); await db.collection("admin_audit_events").insertOne({ id: randomUUID(), adminId, action: "user.data_exported", userId, createdAt: now() }); return snapshot; },
   };
   return new Proxy(repository, { get(target, key) { if (key in target) return target[key]; if (typeof key === "string") return async () => { throw fail(`${key} is not available on the MongoDB deployment yet.`, 501); }; } });
 }
