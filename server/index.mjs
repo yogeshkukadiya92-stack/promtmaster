@@ -66,6 +66,14 @@ app.post("/api/auth/register", async (request, response) => {
   try { const user = await repository.registerUser({ name, email, password }), session = createDeviceSession(user); authAttempts.delete(key); return response.status(201).json({ session }); }
   catch (error) { current.count += 1; authAttempts.set(key, current); return response.status(error?.status || 502).json({ error: error?.status === 409 ? error.message : "Account could not be created." }); }
 });
+app.post("/api/auth/upgrade", async (request, response) => {
+  if (!sessionTokensReady() || repository?.name !== "mongodb") return response.status(503).json({ error: "MongoDB authentication is not configured." });
+  const currentUser = await authenticate(request); if (!currentUser) return response.status(401).json({ error: "A valid workspace session is required." });
+  const name = typeof request.body?.name === "string" ? request.body.name.trim() : "", email = typeof request.body?.email === "string" ? request.body.email.trim().toLowerCase() : "", password = typeof request.body?.password === "string" ? request.body.password : "";
+  if (name.length < 2 || name.length > 60 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || password.length < 10 || password.length > 128) return response.status(400).json({ error: "Enter a valid name, email, and password of at least 10 characters." });
+  try { const user = await repository.upgradeUser(currentUser.id, { name, email, password }); return response.json({ session: createDeviceSession(user) }); }
+  catch (error) { return response.status(error?.status || 502).json({ error: [404,409].includes(error?.status) ? error.message : "Workspace account could not be secured." }); }
+});
 app.post("/api/auth/login", async (request, response) => {
   if (!sessionTokensReady() || repository?.name !== "mongodb") return response.status(503).json({ error: "MongoDB authentication is not configured." });
   const email = typeof request.body?.email === "string" ? request.body.email.trim().toLowerCase() : "", password = typeof request.body?.password === "string" ? request.body.password : "";
