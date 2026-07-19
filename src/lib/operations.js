@@ -1,4 +1,4 @@
-const apiUrl=import.meta.env.VITE_API_URL||"http://localhost:8787";
+const apiUrl=String(import.meta.env.VITE_API_URL||"").replace(/\/$/,"");
 const headers=(token)=>({authorization:`Bearer ${token}`});
 export async function loadSla(token){try{const response=await fetch(`${apiUrl}/api/sla`,{headers:headers(token)});if(!response.ok)return null;return(await response.json()).sla;}catch{return null;}}
 export async function loadRecoveryVerifications(token){try{const response=await fetch(`${apiUrl}/api/recovery-verifications`,{headers:headers(token)});if(!response.ok)return[];return(await response.json()).verifications||[];}catch{return[];}}

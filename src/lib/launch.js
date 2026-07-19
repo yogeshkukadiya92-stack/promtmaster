@@ -1,4 +1,4 @@
-const apiUrl=import.meta.env.VITE_API_URL||"http://localhost:8787";
+const apiUrl=String(import.meta.env.VITE_API_URL||"").replace(/\/$/,"");
 const auth=(token)=>({"content-type":"application/json",authorization:`Bearer ${token}`});
 export async function loadLaunchCenter(token){try{const response=await fetch(`${apiUrl}/api/launch`,{headers:auth(token)});if(!response.ok)return null;return(await response.json()).launch;}catch{return null;}}
 export async function saveLaunchControl(token,control){try{const response=await fetch(`${apiUrl}/api/launch/control`,{method:"PATCH",headers:auth(token),body:JSON.stringify(control)});if(!response.ok)return null;return(await response.json()).launch;}catch{return null;}}

@@ -1,12 +1,13 @@
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import { createSupabaseRepository } from "./supabase-repository.mjs";
+import { createMongoRepository } from "./mongo-repository.mjs";
 import { executeToolCall, registeredTools, toolRequiresApproval, toolRiskLevel } from "./tool-gateway.mjs";
 import { createAgentPlanner } from "./agent-planner.mjs";
 import { createEmailProvider } from "./email-provider.mjs";
 
-const repository = createSupabaseRepository();
-if (!repository) throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for the agent worker.");
+const repository = createMongoRepository() || createSupabaseRepository();
+if (!repository) throw new Error("MONGODB_URI or Supabase service credentials are required for the agent worker.");
 
 const workerName = process.env.AGENT_WORKER_NAME || `worker-${randomUUID().slice(0, 8)}`;
 const planner = createAgentPlanner();
