@@ -45,15 +45,34 @@ app.post("/api/payments/webhook", express.raw({ type: "application/json", limit:
 });
 app.use(express.json({ limit: "32kb" }));
 
-app.post("/api/auth/session", async (request, response) => {
-  if (!sessionTokensReady() || repository?.name !== "mongodb") return response.status(503).json({ error: "MongoDB device sessions are not configured." });
+const readAuthSession = async (request, response) => {
+  if (!sessionTokensReady() || repository?.name !== "mongodb") return response.status(503).json({ error: "MongoDB authentication is not configured." });
   const authorization = request.header("authorization") || "";
   const currentToken = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
   const currentUser = await repository.verifyUser(currentToken);
-  if (currentToken && !currentUser) return response.status(401).json({ error: "This device session is unavailable or suspended.", code: "SESSION_UNAVAILABLE" });
-  const session = currentUser ? { access_token: currentToken, user: currentUser } : createDeviceSession();
-  if (!currentUser) await repository.verifyUser(session.access_token);
-  return response.status(currentUser ? 200 : 201).json({ session });
+  if (!currentUser) return response.status(401).json({ error: "This session is unavailable, expired, or suspended.", code: "SESSION_UNAVAILABLE" });
+  return response.json({ session: { access_token: currentToken, user: currentUser } });
+};
+app.get("/api/auth/session", readAuthSession);
+app.post("/api/auth/session", readAuthSession);
+
+const authAttempts = new Map();
+const authAttempt = (request) => { const key = request.ip || "unknown", current = authAttempts.get(key) || { count: 0, resetAt: Date.now() + 15 * 60 * 1000 }; if (current.resetAt <= Date.now()) { current.count = 0; current.resetAt = Date.now() + 15 * 60 * 1000; } return { key, current }; };
+app.post("/api/auth/register", async (request, response) => {
+  if (!sessionTokensReady() || repository?.name !== "mongodb") return response.status(503).json({ error: "MongoDB authentication is not configured." });
+  const name = typeof request.body?.name === "string" ? request.body.name.trim() : "", email = typeof request.body?.email === "string" ? request.body.email.trim().toLowerCase() : "", password = typeof request.body?.password === "string" ? request.body.password : "";
+  if (name.length < 2 || name.length > 60 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || password.length < 10 || password.length > 128) return response.status(400).json({ error: "Enter a valid name, email, and password of at least 10 characters." });
+  const { key, current } = authAttempt(request); if (current.count >= 8) return response.status(429).json({ error: "Too many account attempts. Try again later." });
+  try { const user = await repository.registerUser({ name, email, password }), session = createDeviceSession(user); authAttempts.delete(key); return response.status(201).json({ session }); }
+  catch (error) { current.count += 1; authAttempts.set(key, current); return response.status(error?.status || 502).json({ error: error?.status === 409 ? error.message : "Account could not be created." }); }
+});
+app.post("/api/auth/login", async (request, response) => {
+  if (!sessionTokensReady() || repository?.name !== "mongodb") return response.status(503).json({ error: "MongoDB authentication is not configured." });
+  const email = typeof request.body?.email === "string" ? request.body.email.trim().toLowerCase() : "", password = typeof request.body?.password === "string" ? request.body.password : "";
+  if (!email || !password || email.length > 254 || password.length > 128) return response.status(400).json({ error: "Email and password are required." });
+  const { key, current } = authAttempt(request); if (current.count >= 8) return response.status(429).json({ error: "Too many sign-in attempts. Try again later." });
+  try { const user = await repository.authenticateUser(email, password); if (!user) { current.count += 1; authAttempts.set(key, current); return response.status(401).json({ error: "Email or password is incorrect." }); } authAttempts.delete(key); return response.json({ session: createDeviceSession(user) }); }
+  catch { current.count += 1; authAttempts.set(key, current); return response.status(502).json({ error: "Sign-in service is temporarily unavailable." }); }
 });
 
 const adminAttempts = new Map();

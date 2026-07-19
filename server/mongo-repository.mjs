@@ -1,10 +1,13 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from "node:crypto";
+import { promisify } from "node:util";
 import { MongoClient } from "mongodb";
 import { verifyDeviceSession } from "./session-token.mjs";
 
 const now = () => new Date().toISOString();
 const fail = (message, status = 404) => Object.assign(new Error(message), { status });
 const hash = (value) => createHash("sha256").update(value).digest("hex");
+const derivePassword = promisify(scrypt);
+const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
 
 export function createMongoRepository() {
   const uri = process.env.MONGODB_URI || process.env.MONGO_URL;
@@ -19,6 +22,7 @@ export function createMongoRepository() {
         db.collection("assets").createIndex({ id: 1 }, { unique: true }),
         db.collection("workspaces").createIndex({ ownerId: 1 }, { unique: true }),
         db.collection("users").createIndex({ id: 1 }, { unique: true }),
+        db.collection("users").createIndex({ emailNormalized: 1 }, { unique: true, sparse: true }),
         db.collection("users").createIndex({ status: 1, lastSeenAt: -1 }),
         db.collection("user_backups").createIndex({ userId: 1, createdAt: -1 }),
         db.collection("activation_events").createIndex({ idempotencyKey: 1 }, { unique: true }),
@@ -99,7 +103,9 @@ export function createMongoRepository() {
 
   const repository = {
     name: "mongodb",
-    async verifyUser(token) { const user = verifyDeviceSession(token); if (!user || user.role === "admin") return null; const db = await database(), seenAt = now(); await db.collection("users").updateOne({ id: user.id }, { $setOnInsert: { id: user.id, label: "Private device workspace", email: user.email, status: "active", createdAt: seenAt }, $set: { lastSeenAt: seenAt } }, { upsert: true }); const record = await db.collection("users").findOne({ id: user.id }); return record?.status === "suspended" ? null : { ...user, label: record?.label || user.email }; },
+    async verifyUser(token) { const user = verifyDeviceSession(token); if (!user || user.role === "admin") return null; const db = await database(), seenAt = now(); await db.collection("users").updateOne({ id: user.id }, { $setOnInsert: { id: user.id, label: user.name || "Private device workspace", email: user.email, status: "active", createdAt: seenAt }, $set: { lastSeenAt: seenAt } }, { upsert: true }); const record = await db.collection("users").findOne({ id: user.id }); return record?.status === "suspended" ? null : { ...user, email: record?.email || user.email, name: record?.name || user.name || "", label: record?.label || record?.name || user.email }; },
+    async registerUser(input) { const db = await database(), emailNormalized = normalizeEmail(input.email); if (await db.collection("users").findOne({ emailNormalized })) throw fail("An account already exists for this email.", 409); const passwordSalt = randomBytes(16).toString("hex"), passwordHash = Buffer.from(await derivePassword(input.password, passwordSalt, 64)).toString("hex"), createdAt = now(); const user = { id: randomUUID(), email: emailNormalized, emailNormalized, name: input.name.trim(), label: input.name.trim(), passwordSalt, passwordHash, status: "active", authProvider: "password", createdAt, lastSeenAt: createdAt }; try { await db.collection("users").insertOne(user); } catch (error) { if (error?.code === 11000) throw fail("An account already exists for this email.", 409); throw error; } return { id: user.id, email: user.email, name: user.name, label: user.label, role: "user" }; },
+    async authenticateUser(email, password) { const db = await database(), record = await db.collection("users").findOne({ emailNormalized: normalizeEmail(email), authProvider: "password" }); const salt = record?.passwordSalt || "00000000000000000000000000000000", candidate = Buffer.from(await derivePassword(password, salt, 64)), expected = record?.passwordHash ? Buffer.from(record.passwordHash, "hex") : Buffer.alloc(64); if (!record || candidate.length !== expected.length || !timingSafeEqual(candidate, expected) || record.status === "suspended") return null; await db.collection("users").updateOne({ id: record.id }, { $set: { lastSeenAt: now() } }); return { id: record.id, email: record.email, name: record.name || record.label || "", label: record.label || record.name || record.email, role: "user" }; },
     async ping() { const db = await database(); await db.command({ ping: 1 }); return true; },
     async list(userId) { const db = await database(); return (await db.collection("assets").find({ userId }).sort({ updatedAt: -1 }).limit(100).toArray()).map(x => x.content); },
     async save(asset, userId) { const db = await database(); await db.collection("assets").updateOne({ id: asset.id, userId }, { $set: { id: asset.id, userId, type: asset.type, title: asset.title, content: asset, updatedAt: asset.createdAt || now() } }, { upsert: true }); return asset; },

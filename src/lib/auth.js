@@ -4,6 +4,7 @@ export const authMode = import.meta.env.VITE_AUTH_MODE === "mongodb" ? "mongodb"
 const mongoAuth = authMode === "mongodb";
 const mongoTokenKey = "intentos.mongodb.session.v1";
 const listeners = new Set();
+const clearWorkspaceCache = () => Object.keys(window.localStorage).filter((key) => key.startsWith("intentos.") || key.startsWith("intentos-")).forEach((key) => window.localStorage.removeItem(key));
 
 export const authConfigured = mongoAuth || Boolean(url && publishableKey);
 let clientPromise;
@@ -21,8 +22,9 @@ async function getSupabase() {
 export async function getInitialSession() {
   if (mongoAuth) {
     const token = window.localStorage.getItem(mongoTokenKey) || "";
-    const response = await fetch("/api/auth/session", { method: "POST", headers: token ? { authorization: `Bearer ${token}` } : {} });
-    if (!response.ok) return null;
+    if (!token) return null;
+    const response = await fetch("/api/auth/session", { headers: { authorization: `Bearer ${token}` } });
+    if (!response.ok) { clearWorkspaceCache(); return null; }
     const { session } = await response.json();
     window.localStorage.setItem(mongoTokenKey, session.access_token);
     return session;
@@ -31,6 +33,25 @@ export async function getInitialSession() {
   if (!supabase) return null;
   const { data } = await supabase.auth.getSession();
   return data.session;
+}
+
+const mongoCredentials = async (path, input) => {
+  const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json", accept: "application/json" }, body: JSON.stringify(input) });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || "Authentication could not be completed.");
+  window.localStorage.setItem(mongoTokenKey, payload.session.access_token);
+  listeners.forEach(callback => callback(payload.session));
+  return payload.session;
+};
+
+export async function signInWithPassword(email, password) {
+  if (!mongoAuth) throw new Error("Password sign-in is available on the MongoDB deployment.");
+  return mongoCredentials("/api/auth/login", { email, password });
+}
+
+export async function registerWithPassword(name, email, password) {
+  if (!mongoAuth) throw new Error("Account registration is available on the MongoDB deployment.");
+  return mongoCredentials("/api/auth/register", { name, email, password });
 }
 
 export async function subscribeToSession(callback) {
@@ -53,7 +74,7 @@ export async function sendMagicLink(email) {
 }
 
 export async function signOut() {
-  if (mongoAuth) { window.localStorage.removeItem(mongoTokenKey); listeners.forEach(callback => callback(null)); return; }
+  if (mongoAuth) { clearWorkspaceCache(); listeners.forEach(callback => callback(null)); return; }
   const supabase = await getSupabase();
   if (!supabase) return;
   const { error } = await supabase.auth.signOut();

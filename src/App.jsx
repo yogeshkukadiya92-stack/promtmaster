@@ -53,7 +53,7 @@ import {
   Wallet,
   X,
 } from "@phosphor-icons/react";
-import { authConfigured, authMode, getInitialSession, sendMagicLink, signOut, subscribeToSession } from "./lib/auth.js";
+import { authConfigured, authMode, getInitialSession, registerWithPassword, sendMagicLink, signInWithPassword, signOut, subscribeToSession } from "./lib/auth.js";
 import { compareModels, evaluateAsset, improveAsset, recommendRoute, runProviderEvaluation, runTestSuite } from "./lib/evaluator.js";
 import { generateAsset, getProviderStatus } from "./lib/generator.js";
 import { marketplaceAssets, marketplaceCategories } from "./lib/marketplace.js";
@@ -148,7 +148,10 @@ function Sidebar({ mobileOpen, onClose, view, setView, assetCount, session, onOp
 }
 
 function AuthDialog({ open, onClose, session }) {
+  const [formMode, setFormMode] = useState("login");
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [status, setStatus] = useState("idle");
   const [message, setMessage] = useState("");
 
@@ -159,9 +162,17 @@ function AuthDialog({ open, onClose, session }) {
     setStatus("loading");
     setMessage("");
     try {
-      await sendMagicLink(email);
-      setStatus("success");
-      setMessage("Check your email for the secure sign-in link.");
+      if (authMode === "mongodb") {
+        if (formMode === "register") await registerWithPassword(name, email, password);
+        else await signInWithPassword(email, password);
+        setStatus("success");
+        setPassword("");
+        window.location.reload();
+      } else {
+        await sendMagicLink(email);
+        setStatus("success");
+        setMessage("Check your email for the secure sign-in link.");
+      }
     } catch (error) {
       setStatus("error");
       setMessage(error.message || "Sign-in could not be started.");
@@ -170,17 +181,25 @@ function AuthDialog({ open, onClose, session }) {
 
   const logOut = async () => {
     setStatus("loading");
-    try { await signOut(); onClose(); } catch (error) { setStatus("error"); setMessage(error.message); }
+    try { await signOut(); window.location.reload(); } catch (error) { setStatus("error"); setMessage(error.message); }
   };
 
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title">
         <button type="button" className="dialog-close" onClick={onClose} aria-label="Close sign in"><X size={20} /></button>
-        <div className="auth-icon"><EnvelopeSimple size={28} weight="duotone" /></div>
-        <h2 id="auth-title">{session ? "Cloud sync is active" : "Sign in to sync"}</h2>
-        <p>{session ? (authMode === "mongodb" ? "Your assets sync to MongoDB using a private session stored on this device." : `Your assets can sync securely as ${session.user.email}.`) : "Use a secure email link to access your Prompt, Skill, and Agent library on any device."}</p>
-        {!authConfigured ? <div className="auth-notice">Cloud authentication is not configured in this environment.</div> : session ? <button type="button" className="auth-primary" onClick={logOut} disabled={status === "loading"}>Reset device session</button> : authMode === "mongodb" ? <button type="button" className="auth-primary" onClick={() => window.location.reload()}>Create private workspace</button> : (
+        <div className="auth-icon">{authMode === "mongodb" ? <Key size={28} weight="duotone" /> : <EnvelopeSimple size={28} weight="duotone" />}</div>
+        <h2 id="auth-title">{session ? "Your account" : formMode === "register" ? "Create your account" : "Welcome back"}</h2>
+        <p>{session ? `Signed in as ${session.user.email}. Your capabilities sync securely to MongoDB.` : authMode === "mongodb" ? formMode === "register" ? "Create one secure account for your private Prompt, Skill, and Agent workspace." : "Sign in to access your private Prompt, Skill, and Agent workspace on any device." : "Use a secure email link to access your library on any device."}</p>
+        {!authConfigured ? <div className="auth-notice">Cloud authentication is not configured in this environment.</div> : session ? <><div className="auth-account"><span>{session.user.name?.slice(0, 2).toUpperCase() || session.user.email?.slice(0, 2).toUpperCase()}</span><div><strong>{session.user.name || session.user.label || "IntentOS user"}</strong><small>{session.user.email}</small></div></div><button type="button" className="auth-primary auth-signout" onClick={logOut} disabled={status === "loading"}>Sign out</button></> : authMode === "mongodb" ? <>
+          <div className="auth-switch" role="tablist" aria-label="Authentication mode"><button type="button" role="tab" aria-selected={formMode === "login"} className={formMode === "login" ? "active" : ""} onClick={() => { setFormMode("login"); setMessage(""); }}>Sign in</button><button type="button" role="tab" aria-selected={formMode === "register"} className={formMode === "register" ? "active" : ""} onClick={() => { setFormMode("register"); setMessage(""); }}>Create account</button></div>
+          <form onSubmit={submit}>
+            {formMode === "register" ? <><label htmlFor="auth-name">Full name</label><input id="auth-name" type="text" required minLength={2} maxLength={60} autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" /></> : null}
+            <label htmlFor="auth-email">Email address</label><input id="auth-email" type="email" required autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@company.com" />
+            <label htmlFor="auth-password">Password</label><input id="auth-password" type="password" required minLength={10} maxLength={128} autoComplete={formMode === "register" ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 10 characters" />
+            <button type="submit" className="auth-primary" disabled={status === "loading"}>{status === "loading" ? "Please wait…" : formMode === "register" ? "Create secure account" : "Sign in"}</button>
+          </form>
+        </> : (
           <form onSubmit={submit}>
             <label htmlFor="auth-email">Email address</label>
             <input id="auth-email" type="email" required autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@company.com" />
@@ -896,7 +915,7 @@ function SettingsView({ status, session, onRefresh }) {
   const integrations = [
     { id: "ai", name: "OpenAI generation", icon: Robot, ready: Boolean(status?.ai?.enabled), detail: status?.ai?.enabled ? status.ai.model : "Optional · deterministic generator active", variables: "OPENAI_API_KEY · OPENAI_MODEL" },
     { id: "database", name: status?.database?.provider === "mongodb" ? "MongoDB workspace" : "Supabase workspace", icon: Database, ready: Boolean(status?.database?.enabled), detail: status?.database?.enabled ? "Cloud persistence enabled" : "Required for durable accounts and assets", variables: status?.database?.provider === "mongodb" ? "MONGODB_URI · MONGODB_DATABASE" : "SUPABASE_URL · SUPABASE_SERVICE_ROLE_KEY" },
-    { id: "auth", name: authMode === "mongodb" ? "Private device authentication" : "Supabase authentication", icon: ShieldCheck, ready: authConfigured, detail: session ? (authMode === "mongodb" ? "Private MongoDB session active" : `Signed in as ${session.user.email}`) : authConfigured ? "Ready for sign-in" : "Authentication not configured", variables: authMode === "mongodb" ? "AUTH_SECRET · VITE_AUTH_MODE" : "VITE_SUPABASE_URL · VITE_SUPABASE_PUBLISHABLE_KEY" },
+    { id: "auth", name: authMode === "mongodb" ? "MongoDB account authentication" : "Supabase authentication", icon: ShieldCheck, ready: authConfigured, detail: session ? `Signed in as ${session.user.email}` : authConfigured ? "Email and password sign-in ready" : "Authentication not configured", variables: authMode === "mongodb" ? "AUTH_SECRET · VITE_AUTH_MODE" : "VITE_SUPABASE_URL · VITE_SUPABASE_PUBLISHABLE_KEY" },
     { id: "email", name: "Invitation email", icon: EnvelopeSimple, ready: Boolean(status?.email?.enabled), detail: status?.email?.enabled ? `${status.email.provider} delivery enabled` : "Secure manual links active", variables: "RESEND_API_KEY · INVITE_EMAIL_FROM · APP_URL" },
     { id: "payments", name: "Marketplace payments", icon: Money, ready: Boolean(status?.payments?.enabled), detail: status?.payments?.enabled ? `${status.payments.provider} checkout enabled` : "Purchases disabled until Stripe is configured", variables: "STRIPE_SECRET_KEY · STRIPE_WEBHOOK_SECRET" },
   ];
