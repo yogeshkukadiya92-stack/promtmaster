@@ -26,5 +26,22 @@ export function createEmailProvider() {
       const response=await fetch("https://api.resend.com/emails",{method:"POST",headers:{authorization:`Bearer ${apiKey}`,"content-type":"application/json"},body:JSON.stringify({from,to:[to],subject,html:`<h1>${escapeHtml(headline)}</h1><p>${escapeHtml(body)}</p><p><a href="${escapeHtml(actionUrl)}">${escapeHtml(actionLabel)}</a></p><p>You are receiving this product guidance from IntentOS.</p>`,text:`${headline}\n\n${body}\n\n${actionLabel}: ${actionUrl}`})});
       if(!response.ok)throw new Error(`Email provider returned ${response.status}.`);const payload=await response.json();return{id:payload.id};
     },
+    async sendPasswordReset({ to, name, resetUrl, expiresAt }) {
+      const greeting = name ? `Hi ${name},` : "Hi,";
+      const response = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          from,
+          to: [to],
+          subject: "Reset your IntentOS password",
+          html: `<h1>Reset your password</h1><p>${escapeHtml(greeting)}</p><p>Use the secure link below to choose a new IntentOS password.</p><p><a href="${escapeHtml(resetUrl)}">Reset password</a></p><p>This single-use link expires ${escapeHtml(new Date(expiresAt).toUTCString())}. If you did not request this, you can safely ignore this email.</p>`,
+          text: `${greeting}\n\nReset your IntentOS password: ${resetUrl}\n\nThis single-use link expires ${new Date(expiresAt).toUTCString()}. If you did not request this, you can safely ignore this email.`,
+        }),
+      });
+      if (!response.ok) throw new Error(`Email provider returned ${response.status}.`);
+      const payload = await response.json();
+      return { id: payload.id };
+    },
   };
 }

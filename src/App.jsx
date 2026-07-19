@@ -53,7 +53,7 @@ import {
   Wallet,
   X,
 } from "@phosphor-icons/react";
-import { authConfigured, authMode, getInitialSession, registerWithPassword, sendMagicLink, signInWithPassword, signOut, subscribeToSession, upgradePasswordAccount } from "./lib/auth.js";
+import { authConfigured, authMode, getInitialSession, registerWithPassword, requestPasswordReset, resetPasswordWithToken, sendMagicLink, signInWithPassword, signOut, subscribeToSession, upgradePasswordAccount } from "./lib/auth.js";
 import { compareModels, evaluateAsset, improveAsset, recommendRoute, runProviderEvaluation, runTestSuite } from "./lib/evaluator.js";
 import { generateAsset, getProviderStatus } from "./lib/generator.js";
 import { marketplaceAssets, marketplaceCategories } from "./lib/marketplace.js";
@@ -147,11 +147,12 @@ function Sidebar({ mobileOpen, onClose, view, setView, assetCount, session, onOp
   );
 }
 
-function AuthDialog({ open, onClose, session }) {
-  const [formMode, setFormMode] = useState("login");
+function AuthDialog({ open, onClose, session, resetToken = "" }) {
+  const [formMode, setFormMode] = useState(resetToken ? "reset" : "login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [status, setStatus] = useState("idle");
   const [message, setMessage] = useState("");
 
@@ -163,6 +164,19 @@ function AuthDialog({ open, onClose, session }) {
     setMessage("");
     try {
       if (authMode === "mongodb") {
+        if (formMode === "forgot") {
+          const result = await requestPasswordReset(email);
+          setStatus("success");
+          setMessage(result.delivery === "unavailable" ? "Reset email delivery is not configured yet. Please contact the administrator." : "If an account exists for this email, a secure reset link is on its way.");
+          return;
+        }
+        if (formMode === "reset") {
+          if (password !== confirmPassword) throw new Error("The two passwords do not match.");
+          await resetPasswordWithToken(resetToken, password);
+          const url = new URL(window.location.href); url.searchParams.delete("reset_password"); window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+          setStatus("success"); setPassword(""); setConfirmPassword(""); setFormMode("login"); setMessage("Password changed. Sign in with your new password.");
+          return;
+        }
         if (formMode === "register") await registerWithPassword(name, email, password);
         else await signInWithPassword(email, password);
         setStatus("success");
@@ -188,23 +202,26 @@ function AuthDialog({ open, onClose, session }) {
     try { await upgradePasswordAccount(name, email, password); window.location.reload(); }
     catch (error) { setStatus("error"); setMessage(error.message || "Workspace account could not be secured."); }
   };
-  const legacySession = session?.user?.email === "Private device workspace";
+  const displayedSession = resetToken ? null : session;
+  const legacySession = displayedSession?.user?.email === "Private device workspace";
 
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title">
         <button type="button" className="dialog-close" onClick={onClose} aria-label="Close sign in"><X size={20} /></button>
         <div className="auth-icon">{authMode === "mongodb" ? <Key size={28} weight="duotone" /> : <EnvelopeSimple size={28} weight="duotone" />}</div>
-        <h2 id="auth-title">{legacySession ? "Secure your workspace" : session ? "Your account" : formMode === "register" ? "Create your account" : "Welcome back"}</h2>
-        <p>{legacySession ? "Add your email and password without changing this workspace or its saved MongoDB data." : session ? `Signed in as ${session.user.email}. Your capabilities sync securely to MongoDB.` : authMode === "mongodb" ? formMode === "register" ? "Create one secure account for your private Prompt, Skill, and Agent workspace." : "Sign in to access your private Prompt, Skill, and Agent workspace on any device." : "Use a secure email link to access your library on any device."}</p>
-        {!authConfigured ? <div className="auth-notice">Cloud authentication is not configured in this environment.</div> : legacySession ? <><form onSubmit={upgrade}><label htmlFor="auth-name">Full name</label><input id="auth-name" type="text" required minLength={2} maxLength={60} autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" /><label htmlFor="auth-email">Email address</label><input id="auth-email" type="email" required autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@company.com" /><label htmlFor="auth-password">Create password</label><input id="auth-password" type="password" required minLength={10} maxLength={128} autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 10 characters" /><button type="submit" className="auth-primary" disabled={status === "loading"}>{status === "loading" ? "Securing workspace…" : "Save account login"}</button></form><button type="button" className="auth-link-button" onClick={logOut} disabled={status === "loading"}>Sign out instead</button></> : session ? <><div className="auth-account"><span>{session.user.name?.slice(0, 2).toUpperCase() || session.user.email?.slice(0, 2).toUpperCase()}</span><div><strong>{session.user.name || session.user.label || "IntentOS user"}</strong><small>{session.user.email}</small></div></div><button type="button" className="auth-primary auth-signout" onClick={logOut} disabled={status === "loading"}>Sign out</button></> : authMode === "mongodb" ? <>
-          <div className="auth-switch" role="tablist" aria-label="Authentication mode"><button type="button" role="tab" aria-selected={formMode === "login"} className={formMode === "login" ? "active" : ""} onClick={() => { setFormMode("login"); setMessage(""); }}>Sign in</button><button type="button" role="tab" aria-selected={formMode === "register"} className={formMode === "register" ? "active" : ""} onClick={() => { setFormMode("register"); setMessage(""); }}>Create account</button></div>
+        <h2 id="auth-title">{legacySession ? "Secure your workspace" : displayedSession ? "Your account" : formMode === "register" ? "Create your account" : formMode === "forgot" ? "Reset your password" : formMode === "reset" ? "Choose a new password" : "Welcome back"}</h2>
+        <p>{legacySession ? "Add your email and password without changing this workspace or its saved MongoDB data." : displayedSession ? `Signed in as ${displayedSession.user.email}. Your capabilities sync securely to MongoDB.` : authMode === "mongodb" ? formMode === "register" ? "Create one secure account for your private Prompt, Skill, and Agent workspace." : formMode === "forgot" ? "Enter your account email and we’ll send a secure, single-use reset link." : formMode === "reset" ? "Use at least 10 characters. Saving it will sign out any older sessions." : "Sign in to access your private Prompt, Skill, and Agent workspace on any device." : "Use a secure email link to access your library on any device."}</p>
+        {!authConfigured ? <div className="auth-notice">Cloud authentication is not configured in this environment.</div> : legacySession ? <><form onSubmit={upgrade}><label htmlFor="auth-name">Full name</label><input id="auth-name" type="text" required minLength={2} maxLength={60} autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" /><label htmlFor="auth-email">Email address</label><input id="auth-email" type="email" required autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@company.com" /><label htmlFor="auth-password">Create password</label><input id="auth-password" type="password" required minLength={10} maxLength={128} autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 10 characters" /><button type="submit" className="auth-primary" disabled={status === "loading"}>{status === "loading" ? "Securing workspace…" : "Save account login"}</button></form><button type="button" className="auth-link-button" onClick={logOut} disabled={status === "loading"}>Sign out instead</button></> : displayedSession ? <><div className="auth-account"><span>{displayedSession.user.name?.slice(0, 2).toUpperCase() || displayedSession.user.email?.slice(0, 2).toUpperCase()}</span><div><strong>{displayedSession.user.name || displayedSession.user.label || "IntentOS user"}</strong><small>{displayedSession.user.email}</small></div></div><button type="button" className="auth-primary auth-signout" onClick={logOut} disabled={status === "loading"}>Sign out</button></> : authMode === "mongodb" ? <>
+          {formMode === "login" || formMode === "register" ? <div className="auth-switch" role="tablist" aria-label="Authentication mode"><button type="button" role="tab" aria-selected={formMode === "login"} className={formMode === "login" ? "active" : ""} onClick={() => { setFormMode("login"); setMessage(""); }}>Sign in</button><button type="button" role="tab" aria-selected={formMode === "register"} className={formMode === "register" ? "active" : ""} onClick={() => { setFormMode("register"); setMessage(""); }}>Create account</button></div> : null}
           <form onSubmit={submit}>
             {formMode === "register" ? <><label htmlFor="auth-name">Full name</label><input id="auth-name" type="text" required minLength={2} maxLength={60} autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" /></> : null}
-            <label htmlFor="auth-email">Email address</label><input id="auth-email" type="email" required autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@company.com" />
-            <label htmlFor="auth-password">Password</label><input id="auth-password" type="password" required minLength={10} maxLength={128} autoComplete={formMode === "register" ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 10 characters" />
-            <button type="submit" className="auth-primary" disabled={status === "loading"}>{status === "loading" ? "Please wait…" : formMode === "register" ? "Create secure account" : "Sign in"}</button>
+            {formMode !== "reset" ? <><label htmlFor="auth-email">Email address</label><input id="auth-email" type="email" required autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@company.com" /></> : null}
+            {formMode !== "forgot" ? <><label htmlFor="auth-password">{formMode === "reset" ? "New password" : "Password"}</label><input id="auth-password" type="password" required minLength={10} maxLength={128} autoComplete={formMode === "login" ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 10 characters" /></> : null}
+            {formMode === "reset" ? <><label htmlFor="auth-confirm-password">Confirm new password</label><input id="auth-confirm-password" type="password" required minLength={10} maxLength={128} autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Repeat your new password" /></> : null}
+            <button type="submit" className="auth-primary" disabled={status === "loading"}>{status === "loading" ? "Please wait…" : formMode === "register" ? "Create secure account" : formMode === "forgot" ? "Send reset link" : formMode === "reset" ? "Save new password" : "Sign in"}</button>
           </form>
+          {formMode === "login" ? <button type="button" className="auth-link-button" onClick={() => { setFormMode("forgot"); setMessage(""); setStatus("idle"); }}>Forgot password?</button> : formMode === "forgot" ? <button type="button" className="auth-link-button" onClick={() => { setFormMode("login"); setMessage(""); setStatus("idle"); }}>Back to sign in</button> : null}
         </> : (
           <form onSubmit={submit}>
             <label htmlFor="auth-email">Email address</label>
@@ -1023,6 +1040,7 @@ export function App() {
   const [invitationResult, setInvitationResult] = useState(null);
   const [inviteAcceptStatus, setInviteAcceptStatus] = useState("idle");
   const inviteToken = useMemo(() => new URLSearchParams(window.location.search).get("invite"), []);
+  const resetPasswordToken = useMemo(() => new URLSearchParams(window.location.search).get("reset_password") || "", []);
   const [launchAccessStatus,setLaunchAccessStatus]=useState("idle");
   const launchAccessToken=useMemo(()=>new URLSearchParams(window.location.search).get("launch_access"),[]);
   const[growthAssignment,setGrowthAssignment]=useState(null);
@@ -1037,6 +1055,7 @@ export function App() {
   useEffect(() => saveReports(reports), [reports]);
   useEffect(() => savePurchases(purchases), [purchases]);
   useEffect(() => saveCollaboration(workspace), [workspace]);
+  useEffect(() => { if (resetPasswordToken) setAuthOpen(true); }, [resetPasswordToken]);
 
   useEffect(() => {
     let active = true;
@@ -1247,7 +1266,7 @@ export function App() {
 
       {view !== "execution" ? <Inspector tab={tab} setTab={setTab} asset={activeAsset} /> : null}
       {generated ? <div className="toast" role="status"><Check size={18} weight="bold" /> {activeAsset?.type} saved to your Library</div> : null}
-      <AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} session={session} />
+      <AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} session={session} resetToken={resetPasswordToken} />
       <CollaborationDialog open={collaborationDialog.open} mode={collaborationDialog.mode} asset={collaborationDialog.asset} onClose={() => setCollaborationDialog((current) => ({ ...current, open: false }))} onSubmit={collaborationDialog.mode === "share" ? shareAsset : inviteMember} />
       {inviteToken && !session ? <div className="invitation-banner"><ShieldCheck size={20} /><div><strong>Workspace invitation</strong><span>Sign in with the invited email address to accept access.</span></div><button type="button" onClick={() => setAuthOpen(true)}>Sign in to accept</button></div> : null}
       {launchAccessToken&&!session?<div className="invitation-banner"><Flag size={20}/><div><strong>Private beta access</strong><span>Sign in to redeem this secure single-use link.</span></div><button type="button" onClick={()=>setAuthOpen(true)}>Sign in to join</button></div>:null}
