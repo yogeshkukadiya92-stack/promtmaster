@@ -54,6 +54,17 @@ export async function registerWithPassword(name, email, password) {
   return mongoCredentials("/api/auth/register", { name, email, password });
 }
 
+export async function upgradePasswordAccount(name, email, password) {
+  if (!mongoAuth) throw new Error("Account upgrade is available on the MongoDB deployment.");
+  const token = window.localStorage.getItem(mongoTokenKey) || "";
+  const response = await fetch("/api/auth/upgrade", { method: "POST", headers: { "content-type": "application/json", accept: "application/json", authorization: `Bearer ${token}` }, body: JSON.stringify({ name, email, password }) });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || "Workspace account could not be secured.");
+  window.localStorage.setItem(mongoTokenKey, payload.session.access_token);
+  listeners.forEach(callback => callback(payload.session));
+  return payload.session;
+}
+
 export async function subscribeToSession(callback) {
   if (mongoAuth) { listeners.add(callback); return () => listeners.delete(callback); }
   const supabase = await getSupabase();

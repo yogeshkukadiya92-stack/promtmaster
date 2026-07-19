@@ -53,7 +53,7 @@ import {
   Wallet,
   X,
 } from "@phosphor-icons/react";
-import { authConfigured, authMode, getInitialSession, registerWithPassword, sendMagicLink, signInWithPassword, signOut, subscribeToSession } from "./lib/auth.js";
+import { authConfigured, authMode, getInitialSession, registerWithPassword, sendMagicLink, signInWithPassword, signOut, subscribeToSession, upgradePasswordAccount } from "./lib/auth.js";
 import { compareModels, evaluateAsset, improveAsset, recommendRoute, runProviderEvaluation, runTestSuite } from "./lib/evaluator.js";
 import { generateAsset, getProviderStatus } from "./lib/generator.js";
 import { marketplaceAssets, marketplaceCategories } from "./lib/marketplace.js";
@@ -183,15 +183,21 @@ function AuthDialog({ open, onClose, session }) {
     setStatus("loading");
     try { await signOut(); window.location.reload(); } catch (error) { setStatus("error"); setMessage(error.message); }
   };
+  const upgrade = async (event) => {
+    event.preventDefault(); setStatus("loading"); setMessage("");
+    try { await upgradePasswordAccount(name, email, password); window.location.reload(); }
+    catch (error) { setStatus("error"); setMessage(error.message || "Workspace account could not be secured."); }
+  };
+  const legacySession = session?.user?.email === "Private device workspace";
 
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title">
         <button type="button" className="dialog-close" onClick={onClose} aria-label="Close sign in"><X size={20} /></button>
         <div className="auth-icon">{authMode === "mongodb" ? <Key size={28} weight="duotone" /> : <EnvelopeSimple size={28} weight="duotone" />}</div>
-        <h2 id="auth-title">{session ? "Your account" : formMode === "register" ? "Create your account" : "Welcome back"}</h2>
-        <p>{session ? `Signed in as ${session.user.email}. Your capabilities sync securely to MongoDB.` : authMode === "mongodb" ? formMode === "register" ? "Create one secure account for your private Prompt, Skill, and Agent workspace." : "Sign in to access your private Prompt, Skill, and Agent workspace on any device." : "Use a secure email link to access your library on any device."}</p>
-        {!authConfigured ? <div className="auth-notice">Cloud authentication is not configured in this environment.</div> : session ? <><div className="auth-account"><span>{session.user.name?.slice(0, 2).toUpperCase() || session.user.email?.slice(0, 2).toUpperCase()}</span><div><strong>{session.user.name || session.user.label || "IntentOS user"}</strong><small>{session.user.email}</small></div></div><button type="button" className="auth-primary auth-signout" onClick={logOut} disabled={status === "loading"}>Sign out</button></> : authMode === "mongodb" ? <>
+        <h2 id="auth-title">{legacySession ? "Secure your workspace" : session ? "Your account" : formMode === "register" ? "Create your account" : "Welcome back"}</h2>
+        <p>{legacySession ? "Add your email and password without changing this workspace or its saved MongoDB data." : session ? `Signed in as ${session.user.email}. Your capabilities sync securely to MongoDB.` : authMode === "mongodb" ? formMode === "register" ? "Create one secure account for your private Prompt, Skill, and Agent workspace." : "Sign in to access your private Prompt, Skill, and Agent workspace on any device." : "Use a secure email link to access your library on any device."}</p>
+        {!authConfigured ? <div className="auth-notice">Cloud authentication is not configured in this environment.</div> : legacySession ? <><form onSubmit={upgrade}><label htmlFor="auth-name">Full name</label><input id="auth-name" type="text" required minLength={2} maxLength={60} autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" /><label htmlFor="auth-email">Email address</label><input id="auth-email" type="email" required autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@company.com" /><label htmlFor="auth-password">Create password</label><input id="auth-password" type="password" required minLength={10} maxLength={128} autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 10 characters" /><button type="submit" className="auth-primary" disabled={status === "loading"}>{status === "loading" ? "Securing workspace…" : "Save account login"}</button></form><button type="button" className="auth-link-button" onClick={logOut} disabled={status === "loading"}>Sign out instead</button></> : session ? <><div className="auth-account"><span>{session.user.name?.slice(0, 2).toUpperCase() || session.user.email?.slice(0, 2).toUpperCase()}</span><div><strong>{session.user.name || session.user.label || "IntentOS user"}</strong><small>{session.user.email}</small></div></div><button type="button" className="auth-primary auth-signout" onClick={logOut} disabled={status === "loading"}>Sign out</button></> : authMode === "mongodb" ? <>
           <div className="auth-switch" role="tablist" aria-label="Authentication mode"><button type="button" role="tab" aria-selected={formMode === "login"} className={formMode === "login" ? "active" : ""} onClick={() => { setFormMode("login"); setMessage(""); }}>Sign in</button><button type="button" role="tab" aria-selected={formMode === "register"} className={formMode === "register" ? "active" : ""} onClick={() => { setFormMode("register"); setMessage(""); }}>Create account</button></div>
           <form onSubmit={submit}>
             {formMode === "register" ? <><label htmlFor="auth-name">Full name</label><input id="auth-name" type="text" required minLength={2} maxLength={60} autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" /></> : null}
