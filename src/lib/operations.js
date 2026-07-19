@@ -1,0 +1,6 @@
+const apiUrl=import.meta.env.VITE_API_URL||"http://localhost:8787";
+const headers=(token)=>({authorization:`Bearer ${token}`});
+export async function loadSla(token){try{const response=await fetch(`${apiUrl}/api/sla`,{headers:headers(token)});if(!response.ok)return null;return(await response.json()).sla;}catch{return null;}}
+export async function loadRecoveryVerifications(token){try{const response=await fetch(`${apiUrl}/api/recovery-verifications`,{headers:headers(token)});if(!response.ok)return[];return(await response.json()).verifications||[];}catch{return[];}}
+export async function runRecoveryVerification(token){try{const response=await fetch(`${apiUrl}/api/recovery-verifications`,{method:"POST",headers:headers(token)});if(!response.ok)return null;return(await response.json()).verification;}catch{return null;}}
+export async function downloadRecoveryManifest(token,id){const response=await fetch(`${apiUrl}/api/recovery-verifications/${id}/export`,{headers:headers(token)});if(!response.ok)return;const blob=await response.blob();const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download=`intentos-recovery-${id}.json`;link.click();URL.revokeObjectURL(url);}

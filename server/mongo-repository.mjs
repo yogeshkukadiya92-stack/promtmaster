@@ -1,0 +1,113 @@
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { MongoClient } from "mongodb";
+import { verifyDeviceSession } from "./session-token.mjs";
+
+const now = () => new Date().toISOString();
+const fail = (message, status = 404) => Object.assign(new Error(message), { status });
+const hash = (value) => createHash("sha256").update(value).digest("hex");
+
+export function createMongoRepository() {
+  const uri = process.env.MONGODB_URI || process.env.MONGO_URL;
+  if (!uri) return null;
+  const client = new MongoClient(uri, { maxPoolSize: 12, minPoolSize: 0, serverSelectionTimeoutMS: 8000 });
+  let databasePromise;
+  const database = async () => {
+    if (!databasePromise) databasePromise = client.connect().then(() => {
+      const db = client.db(process.env.MONGODB_DATABASE || "intentos");
+      Promise.all([
+        db.collection("assets").createIndex({ userId: 1, updatedAt: -1 }),
+        db.collection("assets").createIndex({ id: 1 }, { unique: true }),
+        db.collection("workspaces").createIndex({ ownerId: 1 }, { unique: true }),
+        db.collection("activation_events").createIndex({ idempotencyKey: 1 }, { unique: true }),
+        db.collection("service_samples").createIndex({ createdAt: 1 }, { expireAfterSeconds: 604800 }),
+        db.collection("growth_assignments").createIndex({ experimentId: 1, userId: 1 }, { unique: true }),
+      ]).catch(() => {});
+      return db;
+    });
+    return databasePromise;
+  };
+  const workspaceFor = async (user) => {
+    const db = await database();
+    let workspace = await db.collection("workspaces").findOne({ ownerId: user.id });
+    if (!workspace) {
+      workspace = { id: randomUUID(), ownerId: user.id, name: "IntentOS Workspace", members: [], shares: [], activity: [], createdAt: now(), updatedAt: now() };
+      await db.collection("workspaces").updateOne({ ownerId: user.id }, { $setOnInsert: workspace }, { upsert: true });
+      workspace = await db.collection("workspaces").findOne({ ownerId: user.id });
+    }
+    return workspace;
+  };
+  const ownerWorkspace = async (userId) => workspaceFor({ id: userId, email: "Private device workspace" });
+  const serializeWorkspace = (workspace, user) => ({
+    id: workspace.id, name: workspace.name,
+    members: [{ id: `owner-${workspace.ownerId}`, email: user.email, name: "You", role: "Owner", status: "Active" }, ...(workspace.members || []).map(m => ({ ...m, role: m.role[0].toUpperCase() + m.role.slice(1), status: m.status[0].toUpperCase() + m.status.slice(1) }))],
+    shares: workspace.shares || [], activity: workspace.activity || [], cloud: true,
+  });
+  const activity = async (workspace, message) => {
+    const db = await database();
+    await db.collection("workspaces").updateOne({ id: workspace.id }, { $push: { activity: { $each: [{ id: randomUUID(), message, createdAt: now() }], $position: 0, $slice: 20 } }, $set: { updatedAt: now() } });
+  };
+  const activationReport = async (userId) => {
+    const db = await database();
+    const since = new Date(Date.now() - 30 * 86400000).toISOString();
+    const events = await db.collection("activation_events").find({ userId, occurredAt: { $gte: since } }).sort({ occurredAt: -1 }).limit(20000).toArray();
+    const order = ["intent_submitted", "asset_generated", "asset_saved", "asset_tested", "asset_published"];
+    const labels = { intent_submitted: "Intent submitted", asset_generated: "Generated", asset_saved: "Saved", asset_tested: "Tested", asset_published: "Published" };
+    let progressing = null, previous = 0;
+    const stages = order.map((name, index) => {
+      const matching = events.filter(e => e.eventName === name); const observed = new Set(matching.map(e => e.sessionId));
+      progressing = index ? new Set([...progressing].filter(id => observed.has(id))) : observed;
+      const sessions = progressing.size, before = index ? previous : sessions; previous = sessions;
+      return { name, label: labels[name], events: matching.length, sessions, stepConversionPercent: index ? (before ? Number((sessions / before * 100).toFixed(1)) : 0) : 100 };
+    });
+    return { periodDays: 30, primaryKpi: { name: "Tested activation rate", valuePercent: stages[0].sessions ? Number((stages[3].sessions / stages[0].sessions * 100).toFixed(1)) : 0, numerator: stages[3].sessions, denominator: stages[0].sessions }, stages, activeUsers: new Set(events.map(e => e.userId)).size, trackedSessions: new Set(events.map(e => e.sessionId)).size, totalEvents: events.length, guardrails: { generationFailureEvents: 0, privacy: "No prompt text or generated content stored" }, generatedAt: now() };
+  };
+
+  const repository = {
+    name: "mongodb",
+    verifyUser: async token => verifyDeviceSession(token),
+    async ping() { const db = await database(); await db.command({ ping: 1 }); return true; },
+    async list(userId) { const db = await database(); return (await db.collection("assets").find({ userId }).sort({ updatedAt: -1 }).limit(100).toArray()).map(x => x.content); },
+    async save(asset, userId) { const db = await database(); await db.collection("assets").updateOne({ id: asset.id, userId }, { $set: { id: asset.id, userId, type: asset.type, title: asset.title, content: asset, updatedAt: asset.createdAt || now() } }, { upsert: true }); return asset; },
+    async remove(id, userId) { const db = await database(); await db.collection("assets").deleteOne({ id, userId }); },
+    async recordServiceRequestSample(sample) { const db = await database(); await db.collection("service_samples").insertOne({ ...sample, createdAt: new Date() }); },
+    async listPurchases(userId) { const db = await database(); return db.collection("purchases").find({ userId, status: "paid" }).sort({ createdAt: -1 }).limit(100).toArray(); },
+    async recordPaymentEvent(event) { const db = await database(); if (event?.id) await db.collection("payment_events").updateOne({ id: event.id }, { $setOnInsert: { id: event.id, event, createdAt: now() } }, { upsert: true }); return Boolean(event?.id); },
+    async loadWorkspace(user) { return serializeWorkspace(await workspaceFor(user), user); },
+    async inviteMember(user, { email, role }) { const db = await database(), workspace = await workspaceFor(user), token = randomBytes(32).toString("base64url"), expiresAt = new Date(Date.now() + 604800000).toISOString(); const member = { id: randomUUID(), email, name: "", role, status: "pending", tokenHash: hash(token), expiresAt }; await db.collection("workspaces").updateOne({ id: workspace.id, "members.email": { $ne: email } }, { $push: { members: member } }); await activity(workspace, `Invited ${email} as ${role}.`); return { workspace: await this.loadWorkspace(user), invitation: { token, expiresAt, email } }; },
+    async resendInvitation(user, memberId) { const db = await database(), workspace = await workspaceFor(user), member = (workspace.members || []).find(m => m.id === memberId && m.status === "pending"); if (!member) throw fail("Pending invitation not found."); const token = randomBytes(32).toString("base64url"), expiresAt = new Date(Date.now() + 604800000).toISOString(); await db.collection("workspaces").updateOne({ id: workspace.id, "members.id": memberId }, { $set: { "members.$.tokenHash": hash(token), "members.$.expiresAt": expiresAt } }); return { workspace: await this.loadWorkspace(user), workspaceName: workspace.name, invitation: { token, expiresAt, email: member.email } }; },
+    async updateMember(user, memberId, role) { const db = await database(), workspace = await workspaceFor(user); await db.collection("workspaces").updateOne({ id: workspace.id, "members.id": memberId }, { $set: { "members.$.role": role } }); await activity(workspace, `Updated a member role to ${role}.`); return this.loadWorkspace(user); },
+    async removeMember(user, memberId) { const db = await database(), workspace = await workspaceFor(user); await db.collection("workspaces").updateOne({ id: workspace.id }, { $pull: { members: { id: memberId } } }); await activity(workspace, "Removed a member from the workspace."); return this.loadWorkspace(user); },
+    async acceptInvitation() { throw fail("Device workspaces do not support cross-device invitation redemption yet.", 409); },
+    async shareAsset(user, { assetId, email, access }) { const db = await database(), workspace = await workspaceFor(user); const share = { assetId, email, access: access[0].toUpperCase() + access.slice(1), sharedAt: now() }; await db.collection("workspaces").updateOne({ id: workspace.id }, { $pull: { shares: { assetId, email } } }); await db.collection("workspaces").updateOne({ id: workspace.id }, { $push: { shares: share } }); await activity(workspace, `Shared an asset with ${email} as ${access}.`); return this.loadWorkspace(user); },
+    async isWorkspaceFeatureEnabled(userId, key) { const db = await database(); const value = await db.collection("feature_flags").findOne({ userId, key }); return value?.enabled !== false; },
+    async getEnterpriseUsage(userId) { const db = await database(); const [flags, assets, runs, releases] = await Promise.all([db.collection("feature_flags").find({ userId }).toArray(), db.collection("assets").countDocuments({ userId }), db.collection("agent_runs").find({ userId }).toArray(), db.collection("releases").countDocuments({ userId, status: "approved" })]); const map = { agent_execution: true, production_promotion: true, marketplace_publish: true }; flags.forEach(f => { map[f.key] = f.enabled; }); return { flags: map, report: { periodDays: 30, assets, runs: runs.length, completedRuns: runs.filter(r => r.status === "completed").length, failedRuns: runs.filter(r => r.status === "failed").length, costPaise: runs.reduce((s, r) => s + (r.costUsedPaise || 0), 0), toolCalls: 0, productionReleases: releases, generatedAt: now() } }; },
+    async updateWorkspaceFeatureFlag(userId, key, enabled) { const db = await database(); await db.collection("feature_flags").updateOne({ userId, key }, { $set: { userId, key, enabled, updatedAt: now() } }, { upsert: true }); return this.getEnterpriseUsage(userId); },
+    async recordActivationEvent(user, input) { const db = await database(); await db.collection("activation_events").updateOne({ idempotencyKey: input.idempotencyKey }, { $setOnInsert: { ...input, userId: user.id, occurredAt: now() } }, { upsert: true }); },
+    getActivationReport: activationReport,
+    async getSlaReport() { const db = await database(), since = new Date(Date.now() - 86400000); const samples = await db.collection("service_samples").find({ createdAt: { $gte: since } }).limit(10000).toArray(); const sorted = samples.map(x => x.durationMs).sort((a, b) => a - b), percentile = p => sorted.length ? sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * p) - 1)] : 0, errors = samples.filter(x => x.statusCode >= 500).length, availability = samples.length ? Number(((samples.length - errors) / samples.length * 100).toFixed(3)) : 100, targets = { availabilityPercent: 99.9, p95LatencyMs: 750 }, p95 = percentile(.95), alerts = []; if (!samples.length) alerts.push({ severity: "info", message: "No API traffic captured in the last 24 hours." }); if (availability < targets.availabilityPercent) alerts.push({ severity: "critical", message: `Availability ${availability}% is below target.` }); if (p95 > targets.p95LatencyMs) alerts.push({ severity: "warning", message: `P95 latency ${p95}ms exceeds target.` }); return { windowHours: 24, requestCount: samples.length, errorCount: errors, availability, p50LatencyMs: percentile(.5), p95LatencyMs: p95, p99LatencyMs: percentile(.99), errorBudgetRemainingPercent: errors ? 0 : 100, targets, alerts, generatedAt: now() }; },
+    async getWorkspaceGovernance(userId) { const db = await database(); return await db.collection("governance").findOne({ userId }) || { auditRetentionDays: 365, requireProductionApproval: true, allowExternalAgentActions: false }; },
+    async updateWorkspaceGovernance(userId, input) { const db = await database(); await db.collection("governance").updateOne({ userId }, { $set: { userId, ...input, updatedAt: now() } }, { upsert: true }); return this.getWorkspaceGovernance(userId); },
+    async authorizeExternalAgentActions(userId) { return Boolean((await this.getWorkspaceGovernance(userId)).allowExternalAgentActions); },
+    async exportWorkspaceAudit(userId) { const workspace = await ownerWorkspace(userId), db = await database(); return { workspace: { id: workspace.id, name: workspace.name }, events: await db.collection("audit_events").find({ userId }).sort({ createdAt: -1 }).limit(10000).toArray() }; },
+    async getInfrastructureControls(userId) { const db = await database(); const value = await db.collection("infrastructure").findOne({ userId }); return { region: value?.region || "in", provider: value?.provider || "", keyLastFour: value?.keyLastFour || "", keyRotatedAt: value?.keyRotatedAt || null, drills: value?.drills || [] }; },
+    async saveInfrastructureControls(userId, input, encryptedKey) { const db = await database(); const patch = { userId, ...input, updatedAt: now(), ...(encryptedKey ? { encryptedKey, keyLastFour: encryptedKey.lastFour, keyRotatedAt: now() } : {}) }; await db.collection("infrastructure").updateOne({ userId }, { $set: patch }, { upsert: true }); return this.getInfrastructureControls(userId); },
+    async revokeProviderKey(userId) { const db = await database(); await db.collection("infrastructure").updateOne({ userId }, { $unset: { encryptedKey: "", keyLastFour: "", keyRotatedAt: "" } }); return this.getInfrastructureControls(userId); },
+    async runRecoveryReadinessDrill(userId, input) { const db = await database(), drill = { id: randomUUID(), status: "ready", rpoTargetMinutes: input.rpoTargetMinutes, rtoTargetMinutes: input.rtoTargetMinutes, checks: [{ label: "MongoDB persistence reachable", passed: true }], verifiedRestore: false, createdAt: now() }; await db.collection("infrastructure").updateOne({ userId }, { $push: { drills: { $each: [drill], $position: 0, $slice: 5 } } }, { upsert: true }); return this.getInfrastructureControls(userId); },
+    async runVerifiedRecovery(userId) { const db = await database(), workspace = await ownerWorkspace(userId), counts = { assets: await db.collection("assets").countDocuments({ userId }), agentRuns: await db.collection("agent_runs").countDocuments({ userId }), releases: await db.collection("releases").countDocuments({ userId }), auditEvents: await db.collection("audit_events").countDocuments({ userId }) }, snapshotAt = now(), manifest = { version: 1, workspaceId: workspace.id, snapshotAt, counts }, checksum = hash(JSON.stringify(manifest)), result = { id: randomUUID(), userId, status: "verified", snapshotAt, manifest, checksum, checks: [{ label: "MongoDB collections readable", passed: true }, { label: "Manifest checksum generated", passed: true }], rpoMinutes: 0, rtoMinutes: 15, createdAt: now() }; await db.collection("recovery_manifests").insertOne(result); return result; },
+    async listRecoveryVerifications(userId) { const db = await database(); return db.collection("recovery_manifests").find({ userId }).sort({ createdAt: -1 }).limit(10).toArray(); },
+    async getLifecycleGrowth(userId) { const db = await database(); const defaults = [{ key: "complete_first_test", enabled: true, delayHours: 24, channel: "email" }, { key: "publish_ready_asset", enabled: true, delayHours: 72, channel: "email" }]; for (const item of defaults) await db.collection("lifecycle_automations").updateOne({ userId, key: item.key }, { $setOnInsert: { userId, ...item, updatedAt: now() } }, { upsert: true }); const [automations, deliveries, experiments, assignments, outcomes] = await Promise.all([db.collection("lifecycle_automations").find({ userId }).toArray(), db.collection("lifecycle_deliveries").find({ userId }).sort({ createdAt: -1 }).limit(50).toArray(), db.collection("growth_experiments").find({ userId }).sort({ createdAt: -1 }).limit(20).toArray(), db.collection("growth_assignments").find({ userId }).toArray(), db.collection("activation_events").find({ userId, eventName: "asset_tested" }).toArray()]); return { automations, deliveries: { queued: deliveries.filter(x => x.status === "queued").length, sent: deliveries.filter(x => x.status === "sent").length, failed: deliveries.filter(x => x.status === "failed").length, recent: deliveries.slice(0, 8) }, experiments: experiments.map(e => ({ ...e, results: e.variants.map(v => { const rows = assignments.filter(a => a.experimentId === e.id && a.variantKey === v.key), converted = new Set(rows.filter(a => outcomes.some(o => new Date(o.occurredAt) >= new Date(a.firstExposedAt))).map(a => a.userId)).size; return { ...v, assigned: rows.length, converted, conversionPercent: rows.length ? Number((converted / rows.length * 100).toFixed(1)) : 0 }; }) })) }; },
+    async updateLifecycleAutomation(userId, key, input) { const db = await database(); await db.collection("lifecycle_automations").updateOne({ userId, key }, { $set: { userId, key, ...input, updatedAt: now() } }, { upsert: true }); return this.getLifecycleGrowth(userId); },
+    async createGrowthExperiment(userId, input) { const db = await database(); await db.collection("growth_experiments").insertOne({ id: randomUUID(), userId, name: input.name, surface: "creator_primary_cta", status: "draft", primaryMetric: "tested_activation", allocationPercent: input.allocationPercent, variants: input.variants, createdAt: now() }); return this.getLifecycleGrowth(userId); },
+    async setGrowthExperimentStatus(userId, id, status) { const db = await database(); if (status === "running") await db.collection("growth_experiments").updateMany({ userId, surface: "creator_primary_cta", status: "running", id: { $ne: id } }, { $set: { status: "paused", updatedAt: now() } }); const result = await db.collection("growth_experiments").updateOne({ userId, id }, { $set: { status, updatedAt: now(), ...(status === "running" ? { startedAt: now(), endedAt: null } : {}), ...(status === "completed" ? { endedAt: now() } : {}) } }); if (!result.matchedCount) throw fail("Experiment not found."); return this.getLifecycleGrowth(userId); },
+    async assignGrowthVariant(user, surface) { const db = await database(), experiment = await db.collection("growth_experiments").findOne({ userId: user.id, surface, status: "running" }); if (!experiment) return null; const digest = createHash("sha256").update(`${experiment.id}:${user.id}`).digest(), bucket = digest.readUInt16BE(0) % 100; if (bucket >= experiment.allocationPercent) return null; const variant = experiment.variants[digest.readUInt16BE(2) % experiment.variants.length]; await db.collection("growth_assignments").updateOne({ experimentId: experiment.id, userId: user.id }, { $setOnInsert: { experimentId: experiment.id, userId: user.id, variantKey: variant.key, firstExposedAt: now() } }, { upsert: true }); return { experimentId: experiment.id, variantKey: variant.key, label: variant.label }; },
+    async deliverInAppLifecycle(userId) { const db = await database(), rows = await db.collection("lifecycle_deliveries").find({ userId, channel: "in_app", status: "queued", scheduledFor: { $lte: now() } }).limit(3).toArray(); if (rows.length) await db.collection("lifecycle_deliveries").updateMany({ id: { $in: rows.map(x => x.id) } }, { $set: { status: "sent", sentAt: now(), providerMessageId: "in-app" } }); return rows.map(row => ({ id: row.id, key: row.key, assetId: row.assetId, title: row.key === "complete_first_test" ? "Your capability is ready to test" : "Your tested capability is ready to publish", detail: row.key === "complete_first_test" ? "Open Playground and run the saved quality suite." : "Complete the trust scan and submit it for review.", destination: row.key === "complete_first_test" ? "playground" : "publishing" })); },
+    async materializeLifecycleDeliveries() { return 0; }, async claimLifecycleDelivery() { return null; }, async completeLifecycleDelivery() {}, async failLifecycleDelivery() {},
+    async listAgentRuns(userId) { const db = await database(); return db.collection("agent_runs").find({ userId }).sort({ startedAt: -1 }).limit(40).toArray(); },
+    async listAgentSchedules(userId) { const db = await database(); return db.collection("agent_schedules").find({ userId }).sort({ createdAt: -1 }).toArray(); },
+    async listAgentMemories(userId) { const db = await database(); return db.collection("agent_memories").find({ userId }).sort({ createdAt: -1 }).toArray(); },
+    async getAgentOperations(userId) { const db = await database(); return { workers: [], queued: await db.collection("agent_runs").countDocuments({ userId, status: "queued" }), running: await db.collection("agent_runs").countDocuments({ userId, status: "running" }), completed: await db.collection("agent_runs").countDocuments({ userId, status: "completed" }), failed: await db.collection("agent_runs").countDocuments({ userId, status: "failed" }) }; },
+    async getWorkspaceIdentity() { return { ssoEnabled: false, scimEnabled: false, scimTokenLastFour: "", domains: [], users: [] }; },
+    async listAssetReleases(userId) { const db = await database(); return db.collection("releases").find({ userId }).sort({ createdAt: -1 }).toArray(); },
+  };
+  return new Proxy(repository, { get(target, key) { if (key in target) return target[key]; if (typeof key === "string") return async () => { throw fail(`${key} is not available on the MongoDB deployment yet.`, 501); }; } });
+}

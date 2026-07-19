@@ -1,0 +1,7 @@
+const apiUrl=import.meta.env.VITE_API_URL||"http://localhost:8787";
+const auth=(token)=>({"content-type":"application/json",authorization:`Bearer ${token}`});
+export async function loadLaunchCenter(token){try{const response=await fetch(`${apiUrl}/api/launch`,{headers:auth(token)});if(!response.ok)return null;return(await response.json()).launch;}catch{return null;}}
+export async function saveLaunchControl(token,control){try{const response=await fetch(`${apiUrl}/api/launch/control`,{method:"PATCH",headers:auth(token),body:JSON.stringify(control)});if(!response.ok)return null;return(await response.json()).launch;}catch{return null;}}
+export async function createBetaAccess(token,cohortName){try{const response=await fetch(`${apiUrl}/api/launch/access`,{method:"POST",headers:auth(token),body:JSON.stringify({cohortName})});if(!response.ok)return null;return await response.json();}catch{return null;}}
+export async function revokeBetaAccess(token,id){try{const response=await fetch(`${apiUrl}/api/launch/access/${id}`,{method:"DELETE",headers:auth(token)});return response.ok;}catch{return false;}}
+export async function redeemBetaAccess(token,accessToken){try{const response=await fetch(`${apiUrl}/api/launch/access/redeem`,{method:"POST",headers:auth(token),body:JSON.stringify({token:accessToken})});if(!response.ok)return null;return(await response.json()).workspace;}catch{return null;}}

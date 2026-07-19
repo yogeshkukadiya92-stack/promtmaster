@@ -1,0 +1,4 @@
+create table if not exists public.workspace_feature_flags(workspace_id uuid not null references public.workspaces(id) on delete cascade,flag_key text not null check(flag_key in('agent_execution','production_promotion','marketplace_publish')),enabled boolean not null default true,updated_by uuid references auth.users(id) on delete set null,updated_at timestamptz not null default now(),primary key(workspace_id,flag_key));
+create index if not exists workspace_flags_enabled_idx on public.workspace_feature_flags(workspace_id,enabled);
+alter table public.workspace_feature_flags enable row level security;
+create policy "feature_flags_workspace_read" on public.workspace_feature_flags for select to authenticated using(exists(select 1 from public.workspaces w where w.id=workspace_id and (w.owner_id=(select auth.uid()) or exists(select 1 from public.workspace_members m where m.workspace_id=w.id and m.user_id=(select auth.uid()) and m.status='active'))));
